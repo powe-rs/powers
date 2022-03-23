@@ -1,9 +1,8 @@
 use crate::cmplx;
-use crate::mpc::{BusType, MPC};
+use crate::mpc::{Bus, BusType, Gen};
 use crate::mpopt::MPOpt;
 use crate::rpower::make_sdzip;
 use ndarray::Array1;
-use num_complex::Complex64;
 
 #[derive(PartialEq)]
 pub enum LoadZone {
@@ -50,16 +49,16 @@ pub enum LoadType {
 ///
 /// `nominal` -  use nominal load for dispatchable loads. Otherwise, use
 /// actual realized load for dispatchable loads
-fn total_load(
-    mpc: &MPC,
-    mpopt: &MPOpt,
+pub(crate) fn total_load(
+    bus: &[Bus],
+    gen: Option<&[Gen]>,
     load_zone: LoadZone,
-    load_zones: &[Option<usize>],
+    load_zones: Option<&[Option<usize>]>,
     load_type: LoadType,
     nominal: bool,
+    mpopt: &MPOpt,
     want_q: bool,
 ) -> (Vec<f64>, Option<Vec<f64>>) {
-    let bus = &mpc.bus;
     let nb = bus.len();
 
     // let want_fixed = load_type == LoadType::Both || load_type == LoadType::Fixed;
@@ -105,24 +104,26 @@ fn total_load(
         let mut p_dd = vec![0.0; nb];
         let mut q_dd = if want_q { Some(vec![0.0; nb]) } else { None };
 
-        for (i, g) in mpc.gen.iter().enumerate() {
-            if g.is_load() && g.status {
-                if nominal {
-                    p_dd[g.bus] += -g.pmin;
-                    if want_q {
-                        let q_dd = q_dd.as_mut().unwrap();
-                        // TODO: (gen(ld, QMIN) == 0) .* gen(ld, QMAX) + (gen(ld, QMAX) == 0) .* gen(ld, QMIN)
-                        if g.qmin == 0.0 {
-                            q_dd[g.bus] += g.qmax;
-                        } else if g.qmax == 0.0 {
-                            q_dd[g.bus] += g.qmin;
+        if let Some(gen) = gen {
+            for (i, g) in gen.iter().enumerate() {
+                if g.is_load() && g.status {
+                    if nominal {
+                        p_dd[g.bus] += -g.pmin;
+                        if want_q {
+                            let q_dd = q_dd.as_mut().unwrap();
+                            // TODO: (gen(ld, QMIN) == 0) .* gen(ld, QMAX) + (gen(ld, QMAX) == 0) .* gen(ld, QMIN)
+                            if g.qmin == 0.0 {
+                                q_dd[g.bus] += g.qmax;
+                            } else if g.qmax == 0.0 {
+                                q_dd[g.bus] += g.qmin;
+                            }
                         }
-                    }
-                } else {
-                    p_dd[g.bus] += -g.pg;
-                    if want_q {
-                        let q_dd = q_dd.as_mut().unwrap();
-                        q_dd[g.bus] += -g.qg;
+                    } else {
+                        p_dd[g.bus] += -g.pg;
+                        if want_q {
+                            let q_dd = q_dd.as_mut().unwrap();
+                            q_dd[g.bus] += -g.qg;
+                        }
                     }
                 }
             }

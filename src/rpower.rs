@@ -13,13 +13,13 @@ use std::vec;
 #[macro_export]
 macro_rules! cmplx {
     () => {
-        Complex64::new(0.0, 0.0)
+        num_complex::Complex64::new(0.0, 0.0)
     };
     ($arg1:expr) => {
-        Complex64::new($arg1 as f64, 0.0)
+        num_complex::Complex64::new($arg1 as f64, 0.0)
     };
     ($arg1:expr, $arg2:expr) => {
-        Complex64::new($arg1 as f64, $arg2 as f64)
+        num_complex::Complex64::new($arg1 as f64, $arg2 as f64)
     };
 }
 
@@ -100,7 +100,7 @@ fn bus_types(bus: &[Bus], gen: &[Gen]) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
 /// and returns a sparse zero matrix.
 ///
 /// See also MAKEYBUS.
-fn make_sbus(
+pub(crate) fn make_sbus(
     base_mva: f64,
     bus: &[Bus],
     gen: &[Gen],
@@ -396,7 +396,7 @@ pub(crate) fn make_ybus(
 ///
 /// The derivatives can be take with respect to polar or cartesian coordinates
 /// of voltage, depending on the 3rd argument.
-fn ds_bus_dv(
+pub(crate) fn d_sbus_d_v(
     y_bus: CsMatView<Complex64>,
     v: &[Complex64],
     cartesian: bool,

@@ -99,6 +99,7 @@ pub enum GenStatus {
 }
 
 /// Gen is a generator or dispatchable load.
+#[derive(Clone)]
 pub struct Gen {
     /// Bus number.
     pub bus: usize,
@@ -197,6 +198,7 @@ pub enum CostModel {
 }
 
 /// GenCost defines a generator cost function.
+#[derive(Clone)]
 pub struct GenCost {
     /// Cost model.
     pub model: CostModel,
