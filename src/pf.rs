@@ -8,6 +8,10 @@ use std::collections::HashMap;
 use std::f64::consts::PI;
 use std::ops::Deref;
 
+pub fn runpf(casedata: &MPC, mpopt: &MPOpt) -> Result<(MPC, bool), String> {
+    Err("not implemented".to_string())
+}
+
 pub(crate) fn pfsoln(
     base_mva: f64,
     bus0: &[Bus],
