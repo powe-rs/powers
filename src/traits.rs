@@ -1,17 +1,6 @@
-use ndarray::{Array1, ArrayView1};
-use num_complex::Complex64;
-use sprs::{CsMat, CsMatView};
-
-pub(crate) trait Conj {
-    fn conj(&self) -> Self;
-}
-
-impl Conj for CsMat<Complex64> {
-    fn conj(&self) -> Self {
-        self.map(|a| a.conj())
-    }
-}
+use densetools::arr::Arr;
+use sparsetools::csc::CSC;
 
 pub trait LinearSolver {
-    fn solve(&self, a_mat: CsMatView<f64>, b: ArrayView1<f64>) -> Result<Array1<f64>, String>;
+    fn solve(&self, a_mat: CSC<usize, f64>, b: &Arr<f64>) -> Result<Arr<f64>, String>;
 }

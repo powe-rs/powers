@@ -1,11 +1,11 @@
 use crate::mpc::MPC;
 use crate::mpopt::Alg;
 use crate::rpower::make_ybus;
-use sprs::CsMat;
+use sparsetools::coo::{CCoo, Coo};
 
 /// Builds the two matrices B prime and B double prime used in the fast
 /// decoupled power flow.
-fn make_b(mpc: &MPC, alg: Alg, double_prime: bool) -> (CsMat<f64>, Option<CsMat<f64>>) {
+fn make_b(mpc: &MPC, alg: Alg, double_prime: bool) -> (Coo<usize, f64>, Option<Coo<usize, f64>>) {
     // Form Bp (B prime).
     let mut bus = mpc.bus.clone(); // modify a copy of bus
     for b in bus.iter_mut() {
@@ -22,7 +22,8 @@ fn make_b(mpc: &MPC, alg: Alg, double_prime: bool) -> (CsMat<f64>, Option<CsMat<
             }
         }
         let (y_p, _, _) = make_ybus(mpc.base_mva, &bus, &branch, false);
-        y_p.map(|y| -y.im)
+        // y_p.map(|y| -y.im)
+        -y_p.imag()
     };
 
     let b_pp = if double_prime {
@@ -35,7 +36,8 @@ fn make_b(mpc: &MPC, alg: Alg, double_prime: bool) -> (CsMat<f64>, Option<CsMat<
             }
         }
         let (y_pp, _, _) = make_ybus(mpc.base_mva, &bus, &branch, false);
-        Some(y_pp.map(|y| -y.im))
+        // Some(y_pp.map(|y| -y.im))
+        Some(-y_pp.imag())
     } else {
         None
     };

@@ -2,7 +2,7 @@ use crate::cmplx;
 use crate::mpc::{Bus, BusType, Gen};
 use crate::mpopt::MPOpt;
 use crate::rpower::make_sdzip;
-use ndarray::Array1;
+use densetools::arr::Arr;
 
 #[derive(PartialEq)]
 pub enum LoadZone {
@@ -83,7 +83,7 @@ pub(crate) fn total_load(
     let (p_df, q_df) = if want_fixed {
         let (sd_z, sd_i, sd_p) = make_sdzip(1.0, bus, mpopt);
 
-        let vm = Array1::from_iter(bus.iter().map(|b| cmplx!(b.vm)));
+        let vm = Arr::with_vec(bus.iter().map(|b| cmplx!(b.vm)).collect());
 
         let s_bus_d = &sd_p + &sd_i * &vm + &sd_z * &(&vm * &vm);
         let p_df = s_bus_d.iter().map(|s| s.re).collect(); // real power
@@ -105,7 +105,7 @@ pub(crate) fn total_load(
         let mut q_dd = if want_q { Some(vec![0.0; nb]) } else { None };
 
         if let Some(gen) = gen {
-            for (i, g) in gen.iter().enumerate() {
+            for g in gen {
                 if g.is_load() && g.status {
                     if nominal {
                         p_dd[g.bus] += -g.pmin;

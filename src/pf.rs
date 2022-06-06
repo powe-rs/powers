@@ -1,9 +1,9 @@
 use crate::mpc::*;
 use crate::mpopt::MPOpt;
 use crate::total_load::{total_load, LoadType, LoadZone};
-use ndarray::Array1;
+use densetools::arr::Arr;
 use num_complex::Complex64;
-use sprs::CsMatView;
+use sparsetools::csr::CSR;
 use std::collections::HashMap;
 use std::f64::consts::PI;
 use std::ops::Deref;
@@ -17,10 +17,10 @@ pub(crate) fn pfsoln(
     bus0: &[Bus],
     gen0: &[Gen],
     branch0: &[Branch],
-    Ybus: CsMatView<Complex64>,
-    Yf: CsMatView<Complex64>,
-    Yt: CsMatView<Complex64>,
-    V: Array1<Complex64>,
+    Ybus: &CSR<usize, Complex64>,
+    Yf: &CSR<usize, Complex64>,
+    Yt: &CSR<usize, Complex64>,
+    V: &Arr<Complex64>,
     refbus: &[usize],
     pv: &[usize],
     pq: &[usize],
@@ -35,7 +35,7 @@ pub(crate) fn pfsoln(
         b.va = V[i].arg() * 180.0 / PI;
     }
 
-    let i_bus = &Ybus * &V;
+    let i_bus = Ybus * V;
     // let s_bus = gen.iter().map(|g| V[g.bus] * i_bus[g.bus].conj()).collect();
 
     let (_pd_gbus, qd_gbus) = total_load(
@@ -54,7 +54,7 @@ pub(crate) fn pfsoln(
 
     let nb = bus.len();
     let mut ngb = vec![0; nb];
-    for (i, g) in gen.iter_mut().enumerate() {
+    for g in gen.iter_mut() {
         let s_bus = V[g.bus] * i_bus[g.bus].conj(); // compute total injected bus power
         if is_on(&g.deref()) {
             g.qg = s_bus.im * base_mva + qd_gbus[g.bus]; // inj Q + local Qd
@@ -221,8 +221,8 @@ pub(crate) fn pfsoln(
     }
 
     // Update/compute branch power flows.
-    let i_fr_bus = &Yf * &V;
-    let i_to_bus = &Yf * &V;
+    let i_fr_bus = Yf * V;
+    let i_to_bus = Yt * V;
     for (i, br) in branch.iter_mut().enumerate() {
         if br.status {
             let s_f: Complex64 = V[i] * i_fr_bus[i].conj() * base_mva; // complex power at "from" bus

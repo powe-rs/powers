@@ -1,18 +1,18 @@
 use crate::mpc::{Branch, Bus, BusType, Gen};
 use crate::tests::idx;
-use ndarray::{Array2, ArrayView1};
+use densetools::arr::Arr;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize)]
 struct MPCase {
     #[serde(rename = "baseMVA")]
     base_mva: f64,
-    bus: Array2<f64>,
-    gen: Array2<f64>,
-    branch: Array2<f64>,
+    bus: Vec<Vec<f64>>,
+    gen: Vec<Vec<f64>>,
+    branch: Vec<Vec<f64>>,
 }
 
-fn array_to_bus(a: ArrayView1<f64>) -> Bus {
+fn array_to_bus(a: &Arr<f64>) -> Bus {
     Bus {
         i: a[idx::BUS_I] as usize,
 
@@ -41,7 +41,7 @@ fn array_to_bus(a: ArrayView1<f64>) -> Bus {
     }
 }
 
-fn array_to_gen(a: ArrayView1<f64>) -> Gen {
+fn array_to_gen(a: &Arr<f64>) -> Gen {
     Gen {
         bus: a[idx::GEN_BUS] as usize,
 
@@ -61,7 +61,7 @@ fn array_to_gen(a: ArrayView1<f64>) -> Gen {
     }
 }
 
-fn array_to_branch(a: ArrayView1<f64>) -> Branch {
+fn array_to_branch(a: &Arr<f64>) -> Branch {
     Branch {
         from_bus: a[idx::F_BUS] as usize,
         to_bus: a[idx::T_BUS] as usize,
