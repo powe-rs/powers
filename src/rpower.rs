@@ -3,10 +3,12 @@
 /// Copyright (c) 2022, Richard Lincoln. All rights reserved.
 use crate::mpc::*;
 use crate::mpopt::MPOpt;
+use densetools::arr;
 use densetools::arr::{Arr, CArr};
 use num_complex::Complex64;
 use sparsetools::coo::Coo;
-use sparsetools::csr::{conj, CSR};
+use sparsetools::csr;
+use sparsetools::csr::CSR;
 use std::f64::consts::PI;
 use std::vec;
 
@@ -28,7 +30,7 @@ macro_rules! cmplx {
 /// Generators with "out-of-service" status are treated as PQ buses with
 /// zero generation (regardless of Pg/Qg values in gen). Expects `BUS` and
 /// `GEN` have been converted to use internal consecutive bus numbering.
-fn bus_types(bus: &[Bus], gen: &[Gen]) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
+pub(crate) fn bus_types(bus: &[Bus], gen: &[Gen]) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
     // Buses with generators that are ON.
     let mut bus_gen_status = vec![false; bus.len()];
     for g in gen {
@@ -65,6 +67,13 @@ fn bus_types(bus: &[Bus], gen: &[Gen]) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
     }
 
     (refbus, pv, pq)
+}
+
+// pub type SBus = fn(v_m: &[f64]) -> (Arr<Complex64>, Option<CSR<usize, Complex64>>);
+
+pub trait SBus {
+    fn s_bus(&self, v_m: &[f64]) -> Arr<Complex64>;
+    fn s_bus2(&self, v_m: &[f64]) -> (Arr<Complex64>, Coo<usize, Complex64>);
 }
 
 /// Builds the vector of complex bus power injections.
@@ -363,8 +372,8 @@ pub(crate) fn d_sbus_d_v(
         // dSbus/dVr = conj(diagIbus) + diagV * conj(Ybus)
         // dSbus/dVi = 1j * (conj(diagIbus) - diagV * conj(Ybus))
 
-        let d_sbus_d_vr = conj(&diag_i_bus) + &diag_v * conj(y_bus);
-        let d_sbus_d_vi = (conj(&diag_i_bus) - &diag_v * conj(y_bus)) * J;
+        let d_sbus_d_vr = csr::conj(&diag_i_bus) + &diag_v * csr::conj(y_bus);
+        let d_sbus_d_vi = (csr::conj(&diag_i_bus) - &diag_v * csr::conj(y_bus)) * J;
 
         (d_sbus_d_vr, d_sbus_d_vi)
     } else {
@@ -374,10 +383,66 @@ pub(crate) fn d_sbus_d_v(
         // dSbus/dVa = 1j * diagV * conj(diagIbus - Ybus * diagV)
         // dSbus/dVm = diagV * conj(Ybus * diagVnorm) + conj(diagIbus) * diagVnorm
 
-        let d_sbus_d_va = &diag_v * conj(&(&diag_i_bus - y_bus * &diag_v)) * J;
+        let d_sbus_d_va = &diag_v * csr::conj(&(&diag_i_bus - y_bus * &diag_v)) * J;
         let d_sbus_d_vm =
-            &diag_v * conj(&(y_bus * &diag_v_norm)) + conj(&diag_i_bus) * &diag_v_norm;
+            &diag_v * csr::conj(&(y_bus * &diag_v_norm)) + csr::conj(&diag_i_bus) * &diag_v_norm;
 
         (d_sbus_d_va, d_sbus_d_vm)
     }
+}
+
+/// Computes partial derivatives of current balance w.r.t. voltage.
+///
+/// The derivatives can be take with respect to polar or cartesian coordinates
+/// of voltage, depending on the `vcart` argument.
+/// Returns two matrices containing partial derivatives of the complex bus
+/// current balance w.r.t voltage magnitude and voltage angle, respectively
+/// (for all buses).
+pub(crate) fn d_imis_d_v(
+    s_bus: &Arr<Complex64>,
+    y_bus: &CSR<usize, Complex64>,
+    v: &Arr<Complex64>,
+    vcart: bool,
+) -> Result<(CSR<usize, Complex64>, CSR<usize, Complex64>), String> {
+    let n = v.len();
+
+    let (d_imis_d_v1, d_imis_d_v2) = if vcart {
+        /*
+        diagSV2c = sparse(1:n, 1:n, conj(Sbus./(V.^2)), n, n);
+        */
+        let diag_sv2c = Coo::new(
+            n,
+            n,
+            (0..n).collect(),
+            (0..n).collect(),
+            arr::conj(&(s_bus / arr::pow(v, 2))).to_vec(),
+        )?
+        .to_csr();
+        let d_imis_d_v1 = y_bus + &diag_sv2c; // dImis/dVr
+        let d_imis_d_v2 = Complex64::i() * (y_bus - diag_sv2c); // dImis/dVi
+
+        (d_imis_d_v1, d_imis_d_v2)
+    } else {
+        let v_m = Arr::from_real(&v.norm());
+        let v_norm = v / &v_m;
+        let i_bus = arr::conj(&(s_bus / v));
+        /*
+        diagV       = sparse(1:n, 1:n, V, n, n);
+        diagIbus    = sparse(1:n, 1:n, Ibus, n, n);
+        diagIbusVm  = sparse(1:n, 1:n, Ibus./Vm, n, n);
+        diagVnorm   = sparse(1:n, 1:n, V./abs(V), n, n);
+        */
+        let diag_v = CSR::with_diag(v.to_vec());
+        let diag_ibus = CSR::with_diag(i_bus.to_vec());
+        let diag_ibus_vm = CSR::with_diag((i_bus / &v_m).to_vec());
+        // let diag_v_norm = CSR::with_diag((v / v.norm()).to_vec());
+        let diag_v_norm = CSR::with_diag(v_norm.to_vec());
+
+        let d_imis_d_v1 = Complex64::i() * (y_bus * diag_v - diag_ibus); // dImis/dVa
+        let d_imis_d_v2 = y_bus * diag_v_norm + diag_ibus_vm; // dImis/dVm
+
+        (d_imis_d_v1, d_imis_d_v2)
+    };
+
+    Ok((d_imis_d_v1, d_imis_d_v2))
 }

@@ -53,7 +53,7 @@ pub(crate) fn total_load(
     bus: &[Bus],
     gen: Option<&[Gen]>,
     load_zone: LoadZone,
-    load_zones: Option<&[Option<usize>]>,
+    _load_zones: Option<&[Option<usize>]>,
     load_type: LoadType,
     nominal: bool,
     mpopt: &MPOpt,

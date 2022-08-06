@@ -3,9 +3,12 @@ mod fd;
 mod mpc;
 mod mpopt;
 mod newton;
+mod ext;
+mod gauss;
 mod pf;
+mod radial;
 mod rpower;
-mod tests;
+pub mod tests;
 mod total_load;
 mod traits;
 

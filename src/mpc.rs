@@ -1,7 +1,10 @@
+use crate::ext::Order;
 use num_complex::Complex64;
+use sparsetools::csr::CSR;
 
 /// MPC is a MATPOWER case that models a power system as a directed graph
 /// structure.
+#[derive(Clone)]
 pub struct MPC {
     /// System MVA base used for converting power into per-unit quantities.
     /// Default value is 100.
@@ -15,6 +18,33 @@ pub struct MPC {
 
     /// Transmission lines/cables and transformers.
     pub branch: Vec<Branch>,
+
+    pub areas: Option<Vec<Area>>,
+
+    pub(crate) order: Box<Option<Order>>,
+
+    pub(crate) a_mat: Option<CSR<usize, f64>>,
+    pub(crate) n_mat: Option<CSR<usize, f64>>,
+
+    pub(crate) success: Option<bool>,
+    pub(crate) iterations: Option<usize>,
+}
+
+impl MPC {
+    pub fn new() -> Self {
+        Self {
+            base_mva: 0.0,
+            bus: vec![],
+            gen: vec![],
+            branch: vec![],
+            areas: None,
+            order: Box::new(None),
+            a_mat: None,
+            n_mat: None,
+            success: None,
+            iterations: None,
+        }
+    }
 }
 
 #[derive(Debug, PartialEq, Copy, Clone)]
@@ -29,9 +59,15 @@ pub enum BusType {
     NONE = 3,
 }
 
+impl Default for BusType {
+    fn default() -> Self {
+        Self::PQ
+    }
+}
+
 /// Bus is a node in the power system graph structure.
 /// Static loads and shunts are included in the Bus definition.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct Bus {
     /// Bus number.
     pub i: usize,
@@ -70,6 +106,14 @@ pub struct Bus {
 }
 
 impl Bus {
+    pub(crate) fn is_on(&self) -> bool {
+        self.bus_type != BusType::NONE
+    }
+
+    pub(crate) fn is_off(&self) -> bool {
+        self.bus_type == BusType::NONE
+    }
+
     pub(crate) fn y_sh(&self, base_mva: f64) -> Complex64 {
         Complex64::new(self.gs, self.bs) / Complex64::new(base_mva, 0.0)
     }
@@ -168,3 +212,6 @@ impl Branch {
         }
     }
 }
+
+#[derive(Clone)]
+pub struct Area {}

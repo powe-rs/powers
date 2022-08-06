@@ -8,8 +8,32 @@ pub enum Alg {
     FDXB = 2,
     /// Gauss-Seidel method.
     GS = 3,
+    /// Power/current/admittance summation method (radial networks only).
+    SUM = 4,
 }
 
+pub enum Sum {
+    POWER,
+    CURRENT,
+    ADMITTANCE,
+}
+
+/// Type of nodal balance equation.
+pub enum NodalBalance {
+    POWER,
+    CURRENT,
+}
+
+pub enum BusVoltage {
+    /// bus voltage variables represented in polar coordinates
+    POLAR,
+    /// bus voltage variables represented in cartesian coordinates
+    CARTESIAN,
+    /// Polar updates computed via modified cartesian Jacobian
+    HYBRID,
+}
+
+#[derive(PartialEq, Copy, Clone)]
 pub enum GenQLimits {
     IgnoreLimits = 0,
     // Simultaneous bus type conversion.
@@ -42,6 +66,10 @@ pub struct PFOpt {
 
     // Enforce gen reactive power limits at expense of |V|.
     pub enforce_q_limits: GenQLimits,
+
+    pub current_balance: NodalBalance,
+    pub v_cartesian: BusVoltage,
+    pub summation_method: Sum,
 }
 
 pub struct ExpOpt {
