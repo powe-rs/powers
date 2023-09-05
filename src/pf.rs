@@ -1,21 +1,17 @@
 use crate::dc::{dc_pf, make_b_dc};
-use crate::ext::{ext2int, int2ext};
 use crate::fd;
 use crate::gauss;
-use crate::mpc::*;
+use crate::mpc::MPC;
 use crate::mpopt::{Alg, BusVoltage, GenQLimits, MPOpt, NodalBalance};
-use crate::newton::{
-    newtonpf, newtonpf_I_hybrid, newtonpf_S_cart, newtonpf_S_hybrid, newtonpf_i_cart,
-    newtonpf_i_polar,
-};
+use crate::newton::*;
+use crate::order::{ext2int, int2ext};
+use crate::powers::{bus_types, make_d_sbus_d_vm, make_sbus, make_ybus, SBus};
 use crate::radial::radial_pf;
-use crate::rpower::{bus_types, make_sbus, make_ybus, SBus};
 use crate::total_load::{total_load, LoadType, LoadZone};
 use crate::traits::LinearSolver;
-use densetools::arr::{Arr, CArr};
-use densetools::slice::any;
+
+use casecsv::*;
 use num_complex::Complex64;
-use sparsetools::coo::Coo;
 use sparsetools::csr::CSR;
 use std::collections::{HashMap, HashSet};
 use std::f64::consts::PI;
@@ -31,7 +27,7 @@ struct MakeSBus<'a> {
 }
 
 impl<'a> SBus for MakeSBus<'a> {
-    fn s_bus(&self, v_m: &[f64]) -> Arr<Complex64> {
+    fn s_bus(&self, v_m: &[f64]) -> Vec<Complex64> {
         make_sbus(
             self.base_mva,
             self.bus,
@@ -39,22 +35,18 @@ impl<'a> SBus for MakeSBus<'a> {
             self.mpopt,
             Some(v_m),
             None,
-            false,
         )
-        .0
     }
 
-    fn s_bus2(&self, v_m: &[f64]) -> (Arr<Complex64>, Coo<usize, Complex64>) {
-        let (s_bus, d_sbus_d_vm) = make_sbus(
+    fn d_sbus_d_vm(&self, v_m: &[f64]) -> CSR<usize, Complex64> {
+        make_d_sbus_d_vm(
             self.base_mva,
             self.bus,
             self.gen,
             self.mpopt,
             Some(v_m),
             None,
-            false,
-        );
-        (s_bus, d_sbus_d_vm.unwrap())
+        )
     }
 }
 
@@ -85,7 +77,7 @@ pub fn runpf(
 
         // if mpopt.verbose > 0 {
         //     v = mpver('all');
-        //     fprintf('\nPOW_RS Version % s, %s', v.Version, v.Date);
+        //     fprintf('\nPowers Version % s, %s', v.Version, v.Date);
         // }
         if dc {
             // DC formulation
@@ -93,29 +85,36 @@ pub fn runpf(
             print!(" -- DC Power Flow\n");
             // }
             // initial state
-            let Va0 = Arr::with_vec(bus.iter().map(|b| b.va * PI / 180.0).collect());
+            let Va0: Vec<f64> = bus.iter().map(|b| b.va * PI / 180.0).collect();
 
             // build B matrices and phase shift injections
             let (B, Bf, Pbusinj, Pfinj) = make_b_dc(baseMVA, &bus, &branch);
 
             // compute complex bus power injections (generation - load)
             // adjusted for phase shifters and real shunts
-            let (s_bus, _) = make_sbus(baseMVA, &bus, &gen, &mpopt, None, None, false);
-            let gs = Arr::with_vec(bus.iter().map(|b| b.gs).collect());
-            let Pbus: Arr<f64> = s_bus.real() - Pbusinj - gs / baseMVA;
+            let s_bus = make_sbus(baseMVA, &bus, &gen, &mpopt, None, None);
+            // let gs = bus.iter().map(|b| b.gs).collect_vec();
+            // let Pbus: Vec<f64> = s_bus.real() - Pbusinj - gs / baseMVA;
+            let Pbus: Vec<f64> = (0..bus.len())
+                .map(|i| s_bus[i].re - Pbusinj[i] - bus[i].gs / baseMVA)
+                .collect();
 
             // "run" the power flow
-            let (Va, success): (Arr<f64>, bool) = dc_pf(&B, &Pbus, &Va0, &ref_, &pv, &pq, linsol)?;
+            let (Va, success): (Vec<f64>, bool) = dc_pf(&B, &Pbus, &Va0, &ref_, &pv, &pq, linsol)?;
 
             its = 1;
 
             // update data matrices with solution
-            let pf = (&Bf * &Va + &Pfinj) * baseMVA;
+            let pf: Vec<f64> = (Bf * &Va)
+                .iter()
+                .enumerate()
+                .map(|(i, pf)| (pf + Pfinj[i]) * baseMVA)
+                .collect();
             for (i, br) in branch.iter_mut().enumerate() {
-                br.qf = 0.0;
-                br.qt = 0.0;
-                br.pf = pf[i];
-                br.pt = -pf[i];
+                br.qf = Some(0.0);
+                br.qt = Some(0.0);
+                br.pf = Some(pf[i]);
+                br.pt = Some(-pf[i]);
             }
             for (i, b) in bus.iter_mut().enumerate() {
                 b.vm = 1.0;
@@ -126,7 +125,7 @@ pub fn runpf(
             //      Pg = Pinj + Pload + Gs
             //      newPg = oldPg + newPinj - oldPinj
             let B_ref = B.select(Some(&ref_), None)?;
-            let P_ref = B_ref.mat_vec(&Va)?;
+            let P_ref = B_ref * &Va;
             for r in ref_ {
                 for g in gen.iter_mut() {
                     if g.bus == r {
@@ -140,13 +139,13 @@ pub fn runpf(
 
             // initial state
             // let V0 = Arr::ones(bus.len()); // flat start
-            let mut V0 = Arr::with_capacity(bus.len());
+            let mut V0 = Vec::with_capacity(bus.len());
             for b in bus.iter() {
                 V0.push(Complex64::from_polar(b.vm, b.va * PI / 180.0));
             }
             let pq_bus: HashSet<usize> = HashSet::from_iter(pq.clone().into_iter()); // exclude PQ buses
             for g in gen.iter() {
-                if g.status && !pq_bus.contains(&g.bus) {
+                if g.is_on() && !pq_bus.contains(&g.bus) {
                     V0[g.bus] = Complex64::new(g.vg / (V0[g.bus] * V0[g.bus]).norm(), 0.0);
                 }
             }
@@ -243,7 +242,7 @@ pub fn runpf(
                     Alg::SUM => {
                         let (mpc, success, iterations) =
                             radial_pf(baseMVA, &bus, &gen, &branch, mpopt)?;
-                        (Arr::new(), success, iterations)
+                        (Vec::new(), success, iterations)
                     }
                 };
                 success = success_;
@@ -288,7 +287,7 @@ pub fn runpf(
     mpc.bus = bus;
     mpc.gen = gen;
     mpc.branch = branch;
-    let mut results = int2ext(&mpc, None);
+    let mut results = int2ext(&mpc, None).unwrap();
 
     let order = results.order.take().unwrap();
 
@@ -300,10 +299,10 @@ pub fn runpf(
     }
     let off = order.branch.status.off.clone();
     for i in off {
-        results.branch[i].pf = 0.0;
-        results.branch[i].qf = 0.0;
-        results.branch[i].pt = 0.0;
-        results.branch[i].qt = 0.0;
+        results.branch[i].pf = Some(0.0);
+        results.branch[i].qf = Some(0.0);
+        results.branch[i].pt = Some(0.0);
+        results.branch[i].qt = Some(0.0);
     }
 
     // printpf(&results, 1, mpopt);
@@ -312,10 +311,22 @@ pub fn runpf(
 }
 
 fn have_zip_loads(mpopt: &MPOpt) -> bool {
-    (mpopt.exp.sys_wide_zip_loads.pw.is_some()
-        && any(&mpopt.exp.sys_wide_zip_loads.pw.unwrap()[1..2]))
-        || (mpopt.exp.sys_wide_zip_loads.qw.is_some()
-            && any(&mpopt.exp.sys_wide_zip_loads.qw.unwrap()[1..2])) // TODO: check indexing
+    if let Some(pw) = mpopt.exp.sys_wide_zip_loads.pw {
+        // TODO: check indexing
+        if pw[1..2].iter().any(|&v| v != 0.0) {
+            return true;
+        }
+    }
+    if let Some(qw) = mpopt.exp.sys_wide_zip_loads.qw {
+        if qw[1..2].iter().any(|&v| v != 0.0) {
+            return true;
+        }
+    }
+    false
+    // (mpopt.exp.sys_wide_zip_loads.pw.is_some()
+    //     && any(&mpopt.exp.sys_wide_zip_loads.pw.unwrap()[1..2]))
+    //     || (mpopt.exp.sys_wide_zip_loads.qw.is_some()
+    //         && any(&mpopt.exp.sys_wide_zip_loads.qw.unwrap()[1..2])) // TODO: check indexing
 }
 
 pub(crate) fn pfsoln(
@@ -326,7 +337,7 @@ pub(crate) fn pfsoln(
     Ybus: &CSR<usize, Complex64>,
     Yf: &CSR<usize, Complex64>,
     Yt: &CSR<usize, Complex64>,
-    V: &Arr<Complex64>,
+    V: &[Complex64],
     refbus: &[usize],
     _pv: &[usize],
     _pq: &[usize],
@@ -356,7 +367,7 @@ pub(crate) fn pfsoln(
     );
     let qd_gbus = qd_gbus.as_ref().unwrap();
 
-    let is_on = |g: &Gen| g.status && bus[g.bus].bus_type != BusType::PQ;
+    let is_on = |g: &Gen| g.is_on() && bus[g.bus].is_pq();
 
     let nb = bus.len();
     let mut ngb = vec![0; nb];
@@ -366,7 +377,7 @@ pub(crate) fn pfsoln(
             g.qg = s_bus.im * base_mva + qd_gbus[g.bus]; // inj Q + local Qd
 
             ngb[g.bus] += 1;
-        } else if !g.status {
+        } else if g.is_off() {
             g.qg = 0.0;
         }
     }
@@ -530,19 +541,19 @@ pub(crate) fn pfsoln(
     let i_fr_bus = Yf * V;
     let i_to_bus = Yt * V;
     for (i, br) in branch.iter_mut().enumerate() {
-        if br.status {
+        if br.is_on() {
             let s_f: Complex64 = V[i] * i_fr_bus[i].conj() * base_mva; // complex power at "from" bus
             let s_t: Complex64 = V[i] * i_to_bus[i].conj() * base_mva; // complex power injected at "to" bus
 
-            br.pf = s_f.re;
-            br.qf = s_f.im;
-            br.pt = s_t.re;
-            br.qt = s_t.im;
+            br.pf = Some(s_f.re);
+            br.qf = Some(s_f.im);
+            br.pt = Some(s_t.re);
+            br.qt = Some(s_t.im);
         } else {
-            br.pf = 0.0;
-            br.qf = 0.0;
-            br.pt = 0.0;
-            br.qt = 0.0;
+            br.pf = Some(0.0);
+            br.qf = Some(0.0);
+            br.pt = Some(0.0);
+            br.qt = Some(0.0);
         }
     }
 

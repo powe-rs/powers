@@ -1,16 +1,19 @@
-/// Copyright (c) 1996-2016, Power Systems Engineering Research Center (PSERC)
-/// by Ray Zimmerman, PSERC Cornell
-/// Copyright (c) 2022, Richard Lincoln. All rights reserved.
-use crate::mpc::*;
+// Copyright (c) 1996-2016, Power Systems Engineering Research Center (PSERC)
+// by Ray Zimmerman, PSERC Cornell
+// Copyright (c) 2022-2023, Richard Lincoln. All rights reserved.
+
 use crate::mpopt::MPOpt;
-use densetools::arr;
-use densetools::arr::{Arr, CArr};
+
+use casecsv::*;
+use itertools::{izip, Itertools};
 use num_complex::Complex64;
 use sparsetools::coo::Coo;
-use sparsetools::csr;
+use sparsetools::csr::CCSR;
 use sparsetools::csr::CSR;
+use std::collections::HashSet;
 use std::f64::consts::PI;
-use std::vec;
+
+pub(crate) const J: Complex64 = Complex64 { re: 0.0, im: 1.0 };
 
 #[macro_export]
 macro_rules! cmplx {
@@ -32,39 +35,37 @@ macro_rules! cmplx {
 /// `GEN` have been converted to use internal consecutive bus numbering.
 pub(crate) fn bus_types(bus: &[Bus], gen: &[Gen]) -> (Vec<usize>, Vec<usize>, Vec<usize>) {
     // Buses with generators that are ON.
-    let mut bus_gen_status = vec![false; bus.len()];
-    for g in gen {
-        if g.status {
-            bus_gen_status[g.bus] = true
-        }
-    }
+    // let mut bus_gen_status = vec![false; bus.len()];
+    // for g in gen {
+    //     if g.is_on() {
+    //         bus_gen_status[g.bus] = true
+    //     }
+    // }
+    let bus_gen_status = gen
+        .iter()
+        .filter(|g| g.is_on())
+        .map(|g| g.bus)
+        .collect::<HashSet<usize>>();
 
     // Form index lists for slack, PV, and PQ buses.
     // ref = find(bus(:, BUS_TYPE) == REF & bus_gen_status);   /// reference bus index
     // pv  = find(bus(:, BUS_TYPE) == PV  & bus_gen_status);   /// PV bus indices
     // pq  = find(bus(:, BUS_TYPE) == PQ | ~bus_gen_status);   /// PQ bus indices
-    let mut refbus = Vec::new();
-    let mut pv = Vec::new();
-    let mut pq = Vec::new();
-    for (i, b) in bus.iter().enumerate() {
-        match &b.bus_type {
-            BusType::REF => {
-                if bus_gen_status[i] {
-                    refbus.push(b.i);
-                }
-            }
-            BusType::PV => {
-                if bus_gen_status[i] {
-                    pv.push(b.i)
-                }
-            }
-            &bus_type => {
-                if bus_type == BusType::PQ || !bus_gen_status[i] {
-                    pq.push(b.i);
-                }
-            }
-        }
-    }
+    let refbus = bus
+        .iter()
+        .filter(|b| b.is_ref() && bus_gen_status.contains(&b.bus_i))
+        .map(|b| b.bus_i)
+        .collect::<Vec<usize>>();
+    let pv = bus
+        .iter()
+        .filter(|b| b.is_pv() && bus_gen_status.contains(&b.bus_i))
+        .map(|b| b.bus_i)
+        .collect::<Vec<usize>>();
+    let pq = bus
+        .iter()
+        .filter(|b| b.is_pq() || !bus_gen_status.contains(&b.bus_i))
+        .map(|b| b.bus_i)
+        .collect::<Vec<usize>>();
 
     (refbus, pv, pq)
 }
@@ -72,8 +73,8 @@ pub(crate) fn bus_types(bus: &[Bus], gen: &[Gen]) -> (Vec<usize>, Vec<usize>, Ve
 // pub type SBus = fn(v_m: &[f64]) -> (Arr<Complex64>, Option<CSR<usize, Complex64>>);
 
 pub trait SBus {
-    fn s_bus(&self, v_m: &[f64]) -> Arr<Complex64>;
-    fn s_bus2(&self, v_m: &[f64]) -> (Arr<Complex64>, Coo<usize, Complex64>);
+    fn s_bus(&self, v_m: &[f64]) -> Vec<Complex64>;
+    fn d_sbus_d_vm(&self, v_m: &[f64]) -> CSR<usize, Complex64>;
 }
 
 /// Builds the vector of complex bus power injections.
@@ -88,11 +89,6 @@ pub trait SBus {
 ///
 ///   [SBUS, DSBUS_DVM] = MAKESBUS(BASEMVA, BUS, GEN, MPOPT, VM)
 ///
-/// With `derivative` true, it computes the partial derivative of the
-/// bus injections with respect to voltage magnitude, leaving the first
-/// return value SBUS empty. If VM is empty, it assumes no voltage dependence
-/// and returns a sparse zero matrix.
-///
 /// See also MAKEYBUS.
 pub(crate) fn make_sbus(
     base_mva: f64,
@@ -101,55 +97,91 @@ pub(crate) fn make_sbus(
     mpopt: &MPOpt,
     vm: Option<&[f64]>,
     sg: Option<&[Complex64]>,
-    derivative: bool,
-) -> (Arr<Complex64>, Option<Coo<usize, Complex64>>) {
+) -> Vec<Complex64> {
     let nb = bus.len();
-
-    // get load parameters
-    let (sd_z, sd_i, sd_p) = make_sdzip(base_mva, bus, mpopt);
-
-    let mut s_bus_g = Arr::<Complex64>::zeros(nb);
-    // for (gen_bus, sg_i) in sg_on {
-    //     sbusg[gen_bus] += sg_i;
-    // }
-    if let Some(sg) = sg {
-        for (g, s_pu) in gen.iter().zip(sg) {
-            if g.status {
-                s_bus_g[g.bus] += s_pu
-            }
-        }
-    } else {
-        for g in gen {
-            if g.status {
-                let s_pu = cmplx![g.pg, g.qg] / cmplx![base_mva];
-                s_bus_g[g.bus] += s_pu;
-            }
-        }
-    }
-
-    // Compute per-bus loads in p.u.
-    let v_mag: Arr<Complex64> = match vm {
-        Some(vm) => Arr::from_real(vm),
-        None => Arr::zeros(nb),
-    };
-
-    let s_bus_d = &sd_p + &sd_i * &v_mag + &sd_z * (&v_mag * &v_mag);
+    let base_mva = Complex64::new(base_mva, 0.0);
 
     // Form net complex bus power injection vector
     // (power injected by generators + power injected by loads).
-    let s_bus = s_bus_g - s_bus_d;
+    let mut s_bus = vec![Complex64::default(); nb];
 
-    if !derivative {
-        return (s_bus, None);
+    if let Some(sg) = sg {
+        gen.iter()
+            .zip(sg)
+            .filter(|(g, _)| g.is_on())
+            .for_each(|(g, s_pu)| {
+                s_bus[g.bus] += s_pu;
+            });
+    } else {
+        gen.iter().filter(|g| g.is_on()).for_each(|g| {
+            s_bus[g.bus] += Complex64::new(g.pg, g.qg) / base_mva;
+        });
     }
 
-    let d_sbus_d_vm = if let Some(_) = vm {
-        Coo::with_diagonal(&(sd_i + cmplx!(2.0) * v_mag * sd_z))
+    // get load parameters
+    let pw = mpopt.exp.sys_wide_zip_loads.pw.unwrap_or([1.0, 0.0, 0.0]);
+    let qw = mpopt.exp.sys_wide_zip_loads.qw.unwrap_or(pw);
+
+    bus.iter()
+        .filter(|b| b.pd != 0.0 || b.qd != 0.0)
+        .for_each(|b| {
+            // Compute per-bus loads in p.u.
+            let sd_z = cmplx!(b.pd * pw[2], b.qd * qw[2]) / base_mva;
+            let sd_i = cmplx!(b.pd * pw[1], b.qd * qw[1]) / base_mva;
+            let sd_p = cmplx!(b.pd * pw[0], b.qd * qw[0]) / base_mva;
+
+            let vm_i = match vm {
+                Some(vm) => Complex64::new(vm[b.bus_i], 0.0),
+                None => Complex64::new(1.0, 0.0),
+            };
+
+            let sd = sd_p + (sd_i * vm_i) + (sd_z * (vm_i * vm_i));
+
+            s_bus[b.bus_i] -= sd;
+        });
+
+    s_bus
+}
+
+/// Computes the partial derivative of the bus injections with respect to
+/// voltage magnitude. If `vm` is empty, it assumes no voltage dependence
+/// and returns a sparse zero matrix.
+pub(crate) fn make_d_sbus_d_vm(
+    base_mva: f64,
+    bus: &[Bus],
+    gen: &[Gen],
+    mpopt: &MPOpt,
+    vm: Option<&[f64]>,
+    sg: Option<&[Complex64]>,
+) -> CSR<usize, Complex64> {
+    let nb = bus.len();
+    let base_mva = Complex64::new(base_mva, 0.0);
+
+    // get load parameters
+    let pw = mpopt.exp.sys_wide_zip_loads.pw.unwrap_or([1.0, 0.0, 0.0]);
+    let qw = mpopt.exp.sys_wide_zip_loads.qw.unwrap_or(pw);
+
+    if let Some(vm) = vm {
+        const TWO: Complex64 = Complex64 { re: 2.0, im: 0.0 };
+        let diag: Vec<Complex64> = bus
+            .iter()
+            .map(|b| {
+                if b.pd != 0.0 || b.qd != 0.0 {
+                    let sd_z = Complex64::new(b.pd * pw[2], b.qd * qw[2]) / base_mva;
+                    let sd_i = Complex64::new(b.pd * pw[1], b.qd * qw[1]) / base_mva;
+
+                    let vm_i = Complex64::new(vm[b.bus_i], 0.0);
+
+                    -(sd_i + TWO * vm_i * sd_z)
+                } else {
+                    Complex64::default()
+                }
+            })
+            .collect_vec();
+        Coo::with_diagonal(&diag).to_csr()
     } else {
-        // CsMatBase::zero((nb, nb))
-        Coo::empty(nb, nb, 0)
-    };
-    (s_bus, Some(d_sbus_d_vm))
+        Coo::empty(nb, nb, 0).to_csr()
+    }
 }
 
 /// Builds vectors of nominal complex bus power demands for ZIP loads.
@@ -162,17 +194,19 @@ pub(crate) fn make_sdzip(
     base_mva: f64,
     bus: &[Bus],
     mpopt: &MPOpt,
-) -> (Arr<Complex64>, Arr<Complex64>, Arr<Complex64>) {
+) -> (Vec<Complex64>, Vec<Complex64>, Vec<Complex64>) {
     let pw = mpopt.exp.sys_wide_zip_loads.pw.unwrap_or([1.0, 0.0, 0.0]);
     let qw = mpopt.exp.sys_wide_zip_loads.qw.unwrap_or(pw);
 
-    let mut sd_z = Arr::new();
-    let mut sd_i = Arr::new();
-    let mut sd_p = Arr::new();
-    for (i, b) in bus.iter().enumerate() {
-        sd_z[i] = cmplx!(b.pd * pw[2], b.qd * qw[2]) / cmplx!(base_mva);
-        sd_i[i] = cmplx!(b.pd * pw[1], b.qd * qw[1]) / cmplx!(base_mva);
-        sd_p[i] = cmplx!(b.pd * pw[0], b.qd * qw[0]) / cmplx!(base_mva);
+    let base_mva = cmplx!(base_mva);
+
+    let mut sd_z = Vec::with_capacity(bus.len());
+    let mut sd_i = Vec::with_capacity(bus.len());
+    let mut sd_p = Vec::with_capacity(bus.len());
+    for b in bus {
+        sd_z.push(cmplx!(b.pd * pw[2], b.qd * qw[2]) / base_mva);
+        sd_i.push(cmplx!(b.pd * pw[1], b.qd * qw[1]) / base_mva);
+        sd_p.push(cmplx!(b.pd * pw[0], b.qd * qw[0]) / base_mva);
     }
     (sd_z, sd_i, sd_p)
 }
@@ -197,24 +231,33 @@ pub(crate) fn make_ybus(
     //      |    | = |          | * |    |
     //      | It |   | Ytf  Ytt |   | Vt |
     let mut y_bus = Coo::empty(nb, nb, 0);
-    let (mut y_f, mut y_t) = if yf_yt {
-        (Some(Coo::empty(nl, nb, 0)), Some(Coo::empty(nl, nb, 0)))
+    let mut y_f = if yf_yt {
+        Some(Coo::empty(nl, nb, 0))
     } else {
-        (None, None)
+        None
+    };
+    let mut y_t = if yf_yt {
+        Some(Coo::empty(nl, nb, 0))
+    } else {
+        None
     };
 
     for (i, br) in branch.iter().enumerate() {
-        let y_s = br.y_s(); // series admittance
-        let b_c = if br.status { br.b } else { 0.0 }; // line charging susceptance
+        let y_s = if br.is_on() {
+            Complex64::new(1.0, 0.0) / Complex64::new(br.r, br.x)
+        } else {
+            Complex64::default()
+        }; // series admittance
+        let b_c = if br.is_on() { br.b } else { 0.0 }; // line charging susceptance
         let t = if br.tap == 0.0 { 1.0 } else { br.tap }; // default tap ratio = 1
         let tap = Complex64::from_polar(t, br.shift * PI / 180.0); // add phase shifters
 
-        let y_tt = y_s + cmplx!(0.0, b_c / 2.0);
+        let y_tt = y_s + Complex64::new(0.0, b_c / 2.0);
         let y_ff = y_tt / (tap * tap.conj());
         let y_ft = -y_s / tap.conj();
         let y_tf = -y_s / tap;
 
-        let (f, t) = (br.from_bus, br.to_bus);
+        let (f, t) = (br.f_bus, br.t_bus);
 
         if yf_yt {
             let y_f = y_f.as_mut().unwrap();
@@ -233,8 +276,13 @@ pub(crate) fn make_ybus(
         y_bus.push(t, t, y_tt);
     }
 
+    let y_sh = bus
+        .iter()
+        .map(|b| Complex64::new(b.gs, b.bs) / Complex64::new(base_mva, 0.0))
+        .collect::<Vec<Complex64>>();
+
     for (i, b) in bus.iter().enumerate() {
-        y_bus.push(i, i, b.y_sh(base_mva));
+        y_bus.push(i, i, y_sh[i]);
     }
     (y_bus, y_f, y_t)
 
@@ -358,34 +406,35 @@ pub(crate) fn make_ybus(
 /// of voltage, depending on the 3rd argument.
 pub(crate) fn d_sbus_d_v(
     y_bus: &CSR<usize, Complex64>,
-    v: &Arr<Complex64>,
+    v: &[Complex64],
     cartesian: bool,
 ) -> (CSR<usize, Complex64>, CSR<usize, Complex64>) {
-    const J: Complex64 = Complex64 { re: 0.0, im: 1.0 };
-
     let i_bus = y_bus * v;
 
     let diag_v = CSR::<usize, Complex64>::with_diag(v.to_vec());
-    let diag_i_bus = CSR::<usize, Complex64>::with_diag(i_bus.to_vec());
+    let diag_i_bus = CSR::<usize, Complex64>::with_diag(i_bus);
 
     if cartesian {
         // dSbus/dVr = conj(diagIbus) + diagV * conj(Ybus)
         // dSbus/dVi = 1j * (conj(diagIbus) - diagV * conj(Ybus))
 
-        let d_sbus_d_vr = csr::conj(&diag_i_bus) + &diag_v * csr::conj(y_bus);
-        let d_sbus_d_vi = (csr::conj(&diag_i_bus) - &diag_v * csr::conj(y_bus)) * J;
+        let d_sbus_d_vr = diag_i_bus.conj() + &diag_v * y_bus.conj();
+        let d_sbus_d_vi = (diag_i_bus.conj() - &diag_v * y_bus.conj()) * J;
 
         (d_sbus_d_vr, d_sbus_d_vi)
     } else {
-        let v_norm = v.iter().map(|v| v / cmplx!(v.norm())).collect();
+        let v_norm = v
+            .iter()
+            .map(|v| v / Complex64::new(v.norm(), 0.0))
+            .collect();
         let diag_v_norm = CSR::<usize, Complex64>::with_diag(v_norm);
 
         // dSbus/dVa = 1j * diagV * conj(diagIbus - Ybus * diagV)
         // dSbus/dVm = diagV * conj(Ybus * diagVnorm) + conj(diagIbus) * diagVnorm
 
-        let d_sbus_d_va = &diag_v * csr::conj(&(&diag_i_bus - y_bus * &diag_v)) * J;
+        let d_sbus_d_va = &diag_v * (&diag_i_bus - y_bus * &diag_v).conj() * J;
         let d_sbus_d_vm =
-            &diag_v * csr::conj(&(y_bus * &diag_v_norm)) + csr::conj(&diag_i_bus) * &diag_v_norm;
+            &diag_v * (y_bus * &diag_v_norm).conj() + diag_i_bus.conj() * &diag_v_norm;
 
         (d_sbus_d_va, d_sbus_d_vm)
     }
@@ -399,9 +448,9 @@ pub(crate) fn d_sbus_d_v(
 /// current balance w.r.t voltage magnitude and voltage angle, respectively
 /// (for all buses).
 pub(crate) fn d_imis_d_v(
-    s_bus: &Arr<Complex64>,
+    s_bus: &Vec<Complex64>,
     y_bus: &CSR<usize, Complex64>,
-    v: &Arr<Complex64>,
+    v: &[Complex64],
     vcart: bool,
 ) -> Result<(CSR<usize, Complex64>, CSR<usize, Complex64>), String> {
     let n = v.len();
@@ -415,17 +464,28 @@ pub(crate) fn d_imis_d_v(
             n,
             (0..n).collect(),
             (0..n).collect(),
-            arr::conj(&(s_bus / arr::pow(v, 2))).to_vec(),
+            // (0..n).map(|i| (s_bus[i] / (v[i] * v[i]).conj())).collect(),
+            izip!(s_bus, v)
+                .map(|(s_bus, v)| s_bus / (v * v).conj())
+                .collect_vec(),
         )?
         .to_csr();
         let d_imis_d_v1 = y_bus + &diag_sv2c; // dImis/dVr
-        let d_imis_d_v2 = Complex64::i() * (y_bus - diag_sv2c); // dImis/dVi
+        let d_imis_d_v2 = J * (y_bus - diag_sv2c); // dImis/dVi
 
         (d_imis_d_v1, d_imis_d_v2)
     } else {
-        let v_m = Arr::from_real(&v.norm());
-        let v_norm = v / &v_m;
-        let i_bus = arr::conj(&(s_bus / v));
+        // let v_m = Vec::from_real(&v.norm());
+        // let v_norm: Vec<Complex64> = (0..n).map(|i| v[i] / cmplx!(v[i].norm())).collect();
+        let v_norm = v
+            .iter()
+            .map(|v| v / Complex64::new(v.norm(), 0.0))
+            .collect_vec();
+        // let i_bus: Vec<Complex64> = (0..n).map(|i| s_bus[i] / v[i]).collect();
+        let i_bus = izip!(s_bus, v).map(|(s_bus, v)| s_bus / v).collect_vec();
+        let i_bus_vm: Vec<Complex64> = izip!(&i_bus, v)
+            .map(|(i_bus, v)| i_bus / Complex64::new(v.norm(), 0.0))
+            .collect_vec();
         /*
         diagV       = sparse(1:n, 1:n, V, n, n);
         diagIbus    = sparse(1:n, 1:n, Ibus, n, n);
@@ -433,16 +493,44 @@ pub(crate) fn d_imis_d_v(
         diagVnorm   = sparse(1:n, 1:n, V./abs(V), n, n);
         */
         let diag_v = CSR::with_diag(v.to_vec());
-        let diag_ibus = CSR::with_diag(i_bus.to_vec());
-        let diag_ibus_vm = CSR::with_diag((i_bus / &v_m).to_vec());
+        let diag_ibus = CSR::with_diag(i_bus);
+        let diag_ibus_vm = CSR::with_diag(i_bus_vm);
         // let diag_v_norm = CSR::with_diag((v / v.norm()).to_vec());
-        let diag_v_norm = CSR::with_diag(v_norm.to_vec());
+        let diag_v_norm = CSR::with_diag(v_norm);
 
-        let d_imis_d_v1 = Complex64::i() * (y_bus * diag_v - diag_ibus); // dImis/dVa
+        let d_imis_d_v1 = J * (y_bus * diag_v - diag_ibus); // dImis/dVa
         let d_imis_d_v2 = y_bus * diag_v_norm + diag_ibus_vm; // dImis/dVm
 
         (d_imis_d_v1, d_imis_d_v2)
     };
 
     Ok((d_imis_d_v1, d_imis_d_v2))
+}
+
+/// Sorts the elements of a into ascending order in-place and
+/// returns the new indexes of the elements.
+pub(crate) fn argsort(a: &mut [usize], reverse: bool) -> Vec<usize> {
+    let a0 = a.to_vec(); // FIXME: avoid copy
+    let mut ix: Vec<usize> = (0..a.len()).collect();
+    // ix.sort_by_key(|&i| a[i]);
+    ix.sort_unstable_by(|&i, &j| a[i].partial_cmp(&a[j]).unwrap());
+    if reverse {
+        ix.reverse()
+    }
+    for (i, &j) in ix.iter().enumerate() {
+        a[i] = a0[j];
+    }
+    ix
+}
+
+/// Computes the infinity norm: `max(abs(a))`
+pub(crate) fn norm_inf(a: &[f64]) -> f64 {
+    let mut max = f64::NEG_INFINITY;
+    a.iter().for_each(|v| {
+        let absvi = v.abs();
+        if absvi > max {
+            max = absvi
+        }
+    });
+    max
 }

@@ -1,8 +1,8 @@
 use crate::cmplx;
-use crate::mpc::{Bus, BusType, Gen};
 use crate::mpopt::MPOpt;
-use crate::rpower::make_sdzip;
-use densetools::arr::Arr;
+use crate::powers::make_sdzip;
+use casecsv::{Bus, Gen};
+use num_complex::Complex64;
 
 #[derive(PartialEq)]
 pub enum LoadZone {
@@ -83,9 +83,12 @@ pub(crate) fn total_load(
     let (p_df, q_df) = if want_fixed {
         let (sd_z, sd_i, sd_p) = make_sdzip(1.0, bus, mpopt);
 
-        let vm = Arr::with_vec(bus.iter().map(|b| cmplx!(b.vm)).collect());
+        let vm: Vec<Complex64> = bus.iter().map(|b| cmplx!(b.vm)).collect();
 
-        let s_bus_d = &sd_p + &sd_i * &vm + &sd_z * &(&vm * &vm);
+        // let s_bus_d = &sd_p + &sd_i * &vm + &sd_z * &(&vm * &vm);
+        let s_bus_d = (0..nb)
+            .map(|i| sd_p[i] + sd_i[i] * vm[i] + sd_z[i] * (vm[i] * vm[i]))
+            .collect::<Vec<Complex64>>();
         let p_df = s_bus_d.iter().map(|s| s.re).collect(); // real power
         let q_df = if want_q {
             Some(s_bus_d.iter().map(|s| s.im).collect()) // reactive power
@@ -106,7 +109,7 @@ pub(crate) fn total_load(
 
         if let Some(gen) = gen {
             for g in gen {
-                if g.is_load() && g.status {
+                if g.is_load() && g.is_on() {
                     if nominal {
                         p_dd[g.bus] += -g.pmin;
                         if want_q {
@@ -143,7 +146,7 @@ pub(crate) fn total_load(
             .iter()
             .enumerate()
             .map(|(i, b)| {
-                if b.bus_type != BusType::NONE {
+                if b.bus_type != 4 {
                     p_df[i] + p_dd[i]
                 } else {
                     0.0
@@ -156,7 +159,7 @@ pub(crate) fn total_load(
                 bus.iter()
                     .enumerate()
                     .map(|(i, b)| {
-                        if b.bus_type != BusType::NONE {
+                        if b.bus_type != 4 {
                             let q_df = q_df.as_ref().unwrap();
                             let q_dd = q_dd.as_ref().unwrap();
                             q_df[i] + q_dd[i]
@@ -177,7 +180,7 @@ pub(crate) fn total_load(
 
         for k in 0..nz {
             for (i, b) in bus.iter().enumerate() {
-                if lz[i] == k && b.bus_type != BusType::NONE {
+                if lz[i] == k && b.bus_type != 4 {
                     p_d[k] += p_df[i] + p_dd[i]; // TODO: sum(Pdf(idx)) + sum(Pdd(idx))
 
                     if want_q {

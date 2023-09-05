@@ -1,15 +1,14 @@
 mod dc;
 mod fd;
+mod gauss;
+mod loadcase;
 mod mpc;
 mod mpopt;
 mod newton;
-mod ext;
-mod gauss;
+mod order;
 mod pf;
-// mod ptdf;
+mod powers;
 mod radial;
-mod rpower;
-pub mod tests;
 mod total_load;
 mod traits;
 

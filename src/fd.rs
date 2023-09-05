@@ -1,8 +1,7 @@
-use crate::mpc::{Branch, Bus, MPC};
 use crate::mpopt::{Alg, MPOpt};
-use crate::rpower::{make_ybus, SBus};
+use crate::powers::{make_ybus, SBus};
 use crate::traits::LinearSolver;
-use densetools::arr::Arr;
+use casecsv::{Branch, Bus};
 use num_complex::Complex64;
 use sparsetools::coo::{CCoo, Coo};
 use sparsetools::csr::CSR;
@@ -25,7 +24,7 @@ use sparsetools::csr::CSR;
 pub(crate) fn fdpf(
     _y_bus: &CSR<usize, Complex64>,
     _s_bus: &dyn SBus,
-    _v0: &Arr<Complex64>,
+    _v0: &[Complex64],
     _b_p: &CSR<usize, f64>,
     _b_pp: &CSR<usize, f64>,
     _ref: &[usize],
@@ -34,7 +33,7 @@ pub(crate) fn fdpf(
     _lin_solver: &dyn LinearSolver,
     _mpopt: &MPOpt,
     _progress: Option<&dyn ProgressMonitor>,
-) -> Result<(Arr<Complex64>, bool, usize), String> {
+) -> Result<(Vec<Complex64>, bool, usize), String> {
     Err("not implemented".to_string())
 }
 
