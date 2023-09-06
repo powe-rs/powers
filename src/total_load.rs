@@ -43,9 +43,11 @@ pub enum LoadType {
 /// `load_type`  -  enum specifying types of loads to include, default
 /// is `BOTH` if GEN is provided, otherwise `FIXED`
 ///
+/// ```txt
 ///         'FIXED'        : sum only fixed loads
 ///         'DISPATCHABLE' : sum only dispatchable loads
 ///         'BOTH'         : sum both fixed and dispatchable loads
+/// ```
 ///
 /// `nominal` -  use nominal load for dispatchable loads. Otherwise, use
 /// actual realized load for dispatchable loads

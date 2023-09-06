@@ -1,9 +1,9 @@
-use crate::{mpc::MPC, mpopt::MPOpt, powers::argsort};
+use crate::mpc::MPC;
 
-use anyhow::{format_err, Result};
+use anyhow::{format_err, Ok, Result};
 use casecsv::{Branch, Bus, Gen};
 use itertools::Itertools;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Default, PartialEq)]
 pub enum State {
@@ -12,15 +12,41 @@ pub enum State {
     External,
 }
 
+#[derive(Clone)]
+pub struct Saved {
+    bus: Vec<Bus>,
+    gen: Vec<Gen>,
+    branch: Vec<Branch>,
+}
+
 #[derive(Clone, Default)]
 pub struct Order {
     pub state: State,
-    pub internal: Option<(Vec<Bus>, Vec<Gen>, Vec<Branch>)>,
-    pub external: Option<(Vec<Bus>, Vec<Gen>, Vec<Branch>)>,
+    pub internal: Option<Saved>,
+    pub external: Option<Saved>,
     pub bus: BusOrder,
     pub gen: GenOrder,
     pub branch: BranchOrder,
     pub area: AreaOrder,
+}
+
+impl Order {
+    fn new(nb: usize, ng: usize) -> Self {
+        Self {
+            state: State::External,
+            bus: BusOrder {
+                e2i: HashMap::new(),
+                i2e: vec![0; nb],
+                status: Status::default(),
+            },
+            gen: GenOrder {
+                e2i: vec![0; ng],
+                i2e: vec![0; ng],
+                status: Status::default(),
+            },
+            ..Order::default()
+        }
+    }
 }
 
 #[derive(Clone, Default)]
@@ -54,10 +80,9 @@ pub struct AreaOrder {
     pub status: Status,
 }
 
-pub fn ext2int(mpc: &MPC, mpopt: &MPOpt, reorder_gens: bool) -> MPC {
-    let mut mpc: MPC = mpc.clone();
-    if let Some(order) = mpc.order.take().as_ref() {
-        if order.state == State::External {
+pub fn ext_to_int(mpc: &MPC) -> MPC {
+    if let Some(order) = mpc.order.as_ref() {
+        if order.state == State::Internal {
             return mpc.clone();
         }
     }
@@ -65,28 +90,25 @@ pub fn ext2int(mpc: &MPC, mpopt: &MPOpt, reorder_gens: bool) -> MPC {
     // sizes
     let nb = mpc.bus.len();
     let ng = mpc.gen.len();
-    let ng0 = ng;
-    let dc = if mpc.a_mat.is_some() && mpc.a_mat.as_ref().unwrap().cols() < 2 * nb + 2 * ng {
-        true
-    } else if mpc.n_mat.is_some() && mpc.n_mat.as_ref().unwrap().cols() < 2 * nb + 2 * ng {
-        true
-    } else {
-        false
-    };
+    // let ng0 = ng;
+    // let dc = if mpc.a_mat.is_some() && mpc.a_mat.as_ref().unwrap().cols() < 2 * nb + 2 * ng {
+    //     true
+    // } else if mpc.n_mat.is_some() && mpc.n_mat.as_ref().unwrap().cols() < 2 * nb + 2 * ng {
+    //     true
+    // } else {
+    //     false
+    // };
 
     // initialize order
-    // let o = if first { Order::new() } else { mpc.order.unwrap() };
-    // let mut o = mpc.order.unwrap_or(Order::new(nb));
-    let mut o = match mpc.order.take().as_ref() {
-        Some(order) => order.clone(),
-        None => Order::default(),
-    };
+    // let mut order = mpc.order.take().unwrap_or(Order::new(nb, ng));
+    let mut order = Order::new(nb, ng);
 
     // save data with external ordering
-    o.external = Some((mpc.bus.clone(), mpc.gen.clone(), mpc.branch.clone()));
-    // o.external.bus = mpc.bus.clone();
-    // o.external.branch = mpc.branch.clone();
-    // o.external.gen = mpc.gen.clone();
+    order.external = Some(Saved {
+        bus: mpc.bus.clone(),
+        gen: mpc.gen.clone(),
+        branch: mpc.branch.clone(),
+    });
     // if let Some(areas) = mpc.areas.as_ref() {
     //     if areas.is_empty() {
     //         mpc.areas = None; // if areas field is empty delete it (so it gets ignored)
@@ -96,143 +118,247 @@ pub fn ext2int(mpc: &MPC, mpopt: &MPOpt, reorder_gens: bool) -> MPC {
     // }
 
     // determine which buses, branches, gens are connected & in-service
-    let mut bs = HashMap::new();
+    let bs = mpc
+        .bus
+        .iter()
+        .filter(|b| b.is_pq() || b.is_pv() || b.is_ref())
+        .map(|b| b.bus_i)
+        .collect::<HashSet<usize>>();
     for (i, b) in mpc.bus.iter().enumerate() {
-        if b.bus_type != 4 {
-            o.bus.status.on[i] = 1;
+        if b.is_pq() || b.is_pv() || b.is_ref() {
+            order.bus.status.on.push(i);
         } else {
-            o.bus.status.off[i] = 1;
+            order.bus.status.off.push(i);
         }
-        bs.insert(b.bus_i, b.bus_type != 4);
     }
     for (i, g) in mpc.gen.iter().enumerate() {
-        if g.is_on() && bs[&g.bus] {
-            o.gen.status.on[i] = 1;
+        if g.is_on() && bs.contains(&g.bus) {
+            order.gen.status.on.push(i);
         } else {
-            o.gen.status.off[i] = 1;
+            order.gen.status.off.push(i);
         }
     }
     for (i, br) in mpc.branch.iter().enumerate() {
-        if br.is_on() && bs[&br.f_bus] && bs[&br.t_bus] {
-            o.branch.status.on[i] = 1;
+        if br.is_on() && bs.contains(&br.f_bus) && bs.contains(&br.t_bus) {
+            order.branch.status.on.push(i);
         } else {
-            o.branch.status.off[i] = 1;
+            order.branch.status.off.push(i);
         }
     }
-    let on_bus = mpc
-        .bus
-        .iter()
-        .enumerate()
-        .filter(|(i, _)| o.bus.status.on[*i] != 0)
-        .map(|(_, b)| b.clone())
-        .collect();
-    mpc.bus = on_bus;
+
+    let mut mpc = mpc.clone();
+
+    // delete stuff that is "out"
+    mpc.bus.retain(|b| b.is_pq() || b.is_pv() || b.is_ref());
+
+    mpc.branch
+        .retain(|br| br.is_on() && bs.contains(&br.f_bus) && bs.contains(&br.t_bus));
+
+    mpc.gen.retain(|g| g.is_on() && bs.contains(&g.bus));
 
     // update sizes
     let nb = mpc.bus.len();
     let ng = mpc.gen.len();
 
     // apply consecutive bus numbering
-    // o.bus.i2e = mpc.bus.iter().map(|b| b.i).collect();
     for (i, b) in mpc.bus.iter().enumerate() {
-        o.bus.i2e[i] = b.bus_i;
-        o.bus.e2i.insert(b.bus_i, i);
+        order.bus.i2e[i] = b.bus_i;
+        order.bus.e2i.insert(b.bus_i, i);
     }
     if nb != 0 {
         for b in mpc.bus.iter_mut() {
-            b.bus_i = o.bus.e2i[&b.bus_i];
+            b.bus_i = order.bus.e2i[&b.bus_i];
         }
         for g in mpc.gen.iter_mut() {
-            g.bus = o.bus.e2i[&g.bus];
+            g.bus = order.bus.e2i[&g.bus];
         }
         for br in mpc.branch.iter_mut() {
-            br.f_bus = o.bus.e2i[&br.f_bus];
-            br.t_bus = o.bus.e2i[&br.t_bus];
+            br.f_bus = order.bus.e2i[&br.f_bus];
+            br.t_bus = order.bus.e2i[&br.t_bus];
         }
     }
 
-    if reorder_gens {
-        // reorder gens in order of increasing bus number
-        o.gen.i2e = argsort(&mut mpc.gen.iter().map(|g| g.bus).collect_vec(), false);
-        o.gen.e2i = argsort(&mut o.gen.i2e.clone(), false);
-        todo!("reorder_gens");
-    } else {
-        // don't reorder gens in order of increasing bus number, but
-        // keep the mappings in place for backward compatibility
-        o.gen.i2e = (0..ng).collect();
-        o.gen.e2i = o.gen.i2e.clone();
-    }
+    // if reorder_gens {
+    //     // reorder gens in order of increasing bus number
+    //     order.gen.i2e = argsort(&mut mpc.gen.iter().map(|g| g.bus).collect_vec(), false);
+    //     order.gen.e2i = argsort(&mut order.gen.i2e.clone(), false);
+    //     todo!("reorder_gens");
+    // } else {
+    // don't reorder gens in order of increasing bus number, but
+    // keep the mappings in place for backward compatibility
+    order.gen.i2e = (0..ng).collect();
+    order.gen.e2i = order.gen.i2e.clone();
+    // }
 
-    if o.internal.is_some() {
-        o.internal = None;
+    if order.internal.is_some() {
+        order.internal = None;
     }
-    o.state = State::Internal;
-    mpc.order = Some(o);
+    order.state = State::Internal;
+    mpc.order = Some(order);
 
     mpc
 }
 
-pub(crate) fn int2ext(mpc: &MPC, mpopt: Option<&MPOpt>) -> Result<MPC> {
+pub(crate) fn int_to_ext(mpc: &MPC) -> Result<MPC> {
+    match &mpc.order {
+        Some(order) => {
+            if order.state == State::External {
+                return Ok(mpc.clone());
+            }
+        }
+        None => {
+            return Err(format_err!(
+                "mpc must have \"order\" field for conversion back to external numbering"
+            ));
+        }
+    }
     let mut mpc = mpc.clone();
 
-    if mpc.order.is_none() {
-        return Err(format_err!(
-            "mpc must have \"order\" field for conversion back to external numbering"
-        ));
+    // TODO: execute userfcn callbacks for 'int2ext' stage
+
+    // TODO: convert back "extra" fields
+
+    let order = mpc.order.as_mut().unwrap();
+
+    // Save data matrices with internal ordering & restore originals.
+    let internal = Saved {
+        bus: mpc.bus.drain(..).collect_vec(),
+        branch: mpc.branch.drain(..).collect_vec(),
+        gen: mpc.gen.drain(..).collect_vec(),
+    };
+    if let Some(external) = order.external.as_mut() {
+        mpc.bus = external.bus.drain(..).collect_vec();
+        mpc.branch = external.branch.drain(..).collect_vec();
+        mpc.gen = external.gen.drain(..).collect_vec();
     }
-    let mut o = mpc.order.as_mut().unwrap();
 
-    if o.state == State::Internal {
-        // TODO: execute userfcn callbacks for 'int2ext' stage
+    // TODO: zero pad data matrices on right if necessary
 
-        // TODO: convert back "extra" fields
-
-        // Save data matrices with internal ordering & restore originals.
-        if let Some(internal) = o.internal.as_mut() {
-            internal.0 = mpc.bus.clone();
-            internal.2 = mpc.branch.clone();
-            internal.1 = mpc.gen.clone();
-        } else {
-        }
-        if let Some(external) = &o.external {
-            mpc.bus = external.0.clone();
-            mpc.branch = external.2.clone();
-            mpc.gen = external.1.clone();
-        } else {
-        }
-
-        // TODO: zero pad data matrices on right if necessary
-
-        // Update data (in bus, branch, and gen only).
-        for (i, &j) in o.bus.status.on.iter().enumerate() {
-            mpc.bus[j] = o.internal.as_ref().unwrap().0[i].clone();
-        }
-        for (i, &j) in o.branch.status.on.iter().enumerate() {
-            mpc.branch[j] = o.internal.as_ref().unwrap().2[i].clone();
-        }
-        for (i, &j) in o.gen.status.on.iter().enumerate() {
-            mpc.gen[j] = o.internal.as_ref().unwrap().1[o.gen.e2i[i]].clone();
-        }
-
-        // revert to original bus numbers
-        for &i in &o.bus.status.on {
-            let j = mpc.bus[i].bus_i;
-            mpc.bus[i].bus_i = o.bus.i2e[j];
-        }
-        for &i in &o.branch.status.on {
-            let j = mpc.branch[i].f_bus;
-            mpc.branch[i].f_bus = o.bus.i2e[j];
-        }
-        for &i in &o.branch.status.on {
-            let j = mpc.branch[i].t_bus;
-            mpc.branch[i].t_bus = o.bus.i2e[j];
-        }
-        for &i in &o.gen.status.on {
-            let j = mpc.gen[i].bus;
-            mpc.gen[i].bus = o.bus.i2e[j];
-        }
-        o.external = None;
+    // Update data (in bus, branch, and gen only).
+    for (i, &j) in order.bus.status.on.iter().enumerate() {
+        mpc.bus[j] = internal.bus[i].clone();
     }
+    for (i, &j) in order.branch.status.on.iter().enumerate() {
+        mpc.branch[j] = internal.branch[i].clone();
+    }
+    for (i, &j) in order.gen.status.on.iter().enumerate() {
+        mpc.gen[j] = internal.gen[order.gen.e2i[i]].clone();
+    }
+    order.internal = Some(internal);
+
+    // revert to original bus numbers
+    for &i in &order.bus.status.on {
+        let j = mpc.bus[i].bus_i;
+        mpc.bus[i].bus_i = order.bus.i2e[j];
+    }
+    for &i in &order.branch.status.on {
+        let j = mpc.branch[i].f_bus;
+        mpc.branch[i].f_bus = order.bus.i2e[j];
+    }
+    for &i in &order.branch.status.on {
+        let j = mpc.branch[i].t_bus;
+        mpc.branch[i].t_bus = order.bus.i2e[j];
+    }
+    for &i in &order.gen.status.on {
+        let j = mpc.gen[i].bus;
+        mpc.gen[i].bus = order.bus.i2e[j];
+    }
+    order.external = None;
 
     Ok(mpc)
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::{format_err, Result};
+    use casecsv::NONE;
+    use itertools::izip;
+    use std::env;
+    use std::path::Path;
+
+    use crate::loadcase::load_case;
+    use crate::mpc::MPC;
+
+    use super::{ext_to_int, int_to_ext};
+
+    fn setup() -> Result<(MPC, MPC)> {
+        let manifest_dir = env::var("CARGO_MANIFEST_DIR")?;
+        let casedata_dir = Path::new(&manifest_dir).join("casedata");
+
+        let mpce = load_case(&casedata_dir.join("t_case_ext.case"))?;
+        let mut mpci = load_case(&casedata_dir.join("t_case_int.case"))?;
+
+        mpci.bus.iter_mut().for_each(|b| b.bus_i -= 1);
+        mpci.gen.iter_mut().for_each(|g| g.bus -= 1);
+        mpci.branch.iter_mut().for_each(|br| br.f_bus -= 1);
+        mpci.branch.iter_mut().for_each(|br| br.t_bus -= 1);
+
+        Ok((mpce, mpci))
+    }
+
+    fn compare_case(expected: &MPC, actual: &MPC) -> Result<()> {
+        if let Some((b_exp, b_act)) =
+            izip!(&expected.bus, &actual.bus).find(|(b_exp, b_act)| b_exp != b_act)
+        {
+            return Err(format_err!(
+                "buses must be equal:\nexpected: {:?}\nactual: {:?}",
+                b_exp,
+                b_act
+            ));
+        }
+        if let Some((g_exp, g_act)) =
+            izip!(&expected.gen, &actual.gen).find(|(g_exp, g_act)| g_exp != g_act)
+        {
+            return Err(format_err!(
+                "gens must be equal:\nexpected: {:?}\nactual: {:?}",
+                g_exp,
+                g_act
+            ));
+        }
+        if let Some((br_exp, br_act)) =
+            izip!(&expected.branch, &actual.branch).find(|(br_exp, br_act)| br_exp != br_act)
+        {
+            return Err(format_err!(
+                "branches must be equal:\nexpected: {:?}\nactual: {:?}",
+                br_exp,
+                br_act
+            ));
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_ext_to_int() -> Result<()> {
+        let (mpce, mpci) = setup()?;
+
+        let mpc = ext_to_int(&mpce);
+        compare_case(&mpci, &mpc)?;
+
+        let mpc = ext_to_int(&mpc);
+        compare_case(&mpci, &mpc)?;
+
+        let mpc = int_to_ext(&mpc)?;
+        compare_case(&mpce, &mpc)?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_ext_to_int_all_buses_isolated() -> Result<()> {
+        let (mut mpc, _) = setup()?;
+        mpc.bus.iter_mut().for_each(|b| b.bus_type = NONE);
+
+        let mpci = ext_to_int(&mpc);
+        if !mpci.bus.is_empty() {
+            return Err(format_err!(
+                "internal case must be empty: {}",
+                mpci.bus.len()
+            ));
+        }
+
+        let mpce = int_to_ext(&mpci)?;
+        compare_case(&mpc, &mpce)?;
+
+        Ok(())
+    }
 }

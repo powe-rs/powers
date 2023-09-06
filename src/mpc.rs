@@ -1,9 +1,7 @@
 use crate::order::Order;
-use casecsv::*;
+use casecsv::{Branch, Bus, Gen};
 use sparsetools::csr::CSR;
 
-/// MPC is a MATPOWER case that models a power system as a directed graph
-/// structure.
 #[derive(Clone, Default)]
 pub struct MPC {
     /// System MVA base used for converting power into per-unit quantities.

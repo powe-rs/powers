@@ -4,7 +4,7 @@ use crate::gauss;
 use crate::mpc::MPC;
 use crate::mpopt::{Alg, BusVoltage, GenQLimits, MPOpt, NodalBalance};
 use crate::newton::*;
-use crate::order::{ext2int, int2ext};
+use crate::order::{ext_to_int, int_to_ext};
 use crate::powers::{bus_types, make_d_sbus_d_vm, make_sbus, make_ybus, SBus};
 use crate::radial::radial_pf;
 use crate::total_load::{total_load, LoadType, LoadZone};
@@ -63,7 +63,7 @@ pub fn runpf(
     let mpc = casedata;
 
     // convert to internal indexing
-    let mut mpc = ext2int(mpc, mpopt, false);
+    let mut mpc = ext_to_int(mpc);
     let (baseMVA, mut bus, mut gen, mut branch) = (mpc.base_mva, mpc.bus, mpc.gen, mpc.branch);
 
     let (t0, success, its) = if !bus.is_empty() {
@@ -287,7 +287,7 @@ pub fn runpf(
     mpc.bus = bus;
     mpc.gen = gen;
     mpc.branch = branch;
-    let mut results = int2ext(&mpc, None).unwrap();
+    let mut results = int_to_ext(&mpc).unwrap();
 
     let order = results.order.take().unwrap();
 
