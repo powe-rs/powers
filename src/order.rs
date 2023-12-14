@@ -2,7 +2,6 @@ use crate::mpc::MPC;
 
 use anyhow::{format_err, Ok, Result};
 use casecsv::{Branch, Bus, Gen};
-use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 
 #[derive(Clone, Default, PartialEq)]
@@ -19,7 +18,7 @@ pub struct Saved {
     branch: Vec<Branch>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Order {
     pub state: State,
     pub internal: Option<Saved>,
@@ -31,31 +30,35 @@ pub struct Order {
 }
 
 impl Order {
-    fn new(nb: usize, ng: usize) -> Self {
+    fn new(nb: usize, ng: usize, nl: usize) -> Self {
         Self {
             state: State::External,
-            bus: BusOrder {
-                e2i: HashMap::new(),
-                i2e: vec![0; nb],
-                status: Status::default(),
-            },
-            gen: GenOrder {
-                e2i: vec![0; ng],
-                i2e: vec![0; ng],
-                status: Status::default(),
-            },
-            ..Order::default()
+            internal: None,
+            external: None,
+            bus: BusOrder::new(nb),
+            gen: GenOrder::new(ng),
+            branch: BranchOrder::new(nl),
+            area: AreaOrder::default(),
         }
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct Status {
     pub on: Vec<usize>,
     pub off: Vec<usize>,
 }
 
-#[derive(Clone, Default)]
+impl Status {
+    fn with_capacity(capacity: usize) -> Self {
+        Self {
+            on: Vec::with_capacity(capacity),
+            off: Vec::default(),
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct BusOrder {
     // pub e2i: Vec<usize>,
     pub e2i: HashMap<usize, usize>,
@@ -63,21 +66,57 @@ pub struct BusOrder {
     pub status: Status,
 }
 
-#[derive(Clone, Default)]
+impl BusOrder {
+    fn new(nb: usize) -> Self {
+        Self {
+            e2i: HashMap::with_capacity(nb),
+            i2e: vec![0; nb],
+            status: Status::with_capacity(nb),
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct GenOrder {
     pub e2i: Vec<usize>,
     pub i2e: Vec<usize>,
     pub status: Status,
 }
 
-#[derive(Clone, Default)]
+impl GenOrder {
+    fn new(ng: usize) -> Self {
+        Self {
+            e2i: vec![0; ng],
+            i2e: vec![0; ng],
+            status: Status::with_capacity(ng),
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct BranchOrder {
     pub status: Status,
 }
 
-#[derive(Clone, Default)]
+impl BranchOrder {
+    fn new(nl: usize) -> Self {
+        Self {
+            status: Status::with_capacity(nl),
+        }
+    }
+}
+
+#[derive(Clone)]
 pub struct AreaOrder {
     pub status: Status,
+}
+
+impl Default for AreaOrder {
+    fn default() -> Self {
+        Self {
+            status: Status::with_capacity(0),
+        }
+    }
 }
 
 pub fn ext_to_int(mpc: &MPC) -> MPC {
@@ -90,6 +129,7 @@ pub fn ext_to_int(mpc: &MPC) -> MPC {
     // sizes
     let nb = mpc.bus.len();
     let ng = mpc.gen.len();
+    let nl = mpc.branch.len();
     // let ng0 = ng;
     // let dc = if mpc.a_mat.is_some() && mpc.a_mat.as_ref().unwrap().cols() < 2 * nb + 2 * ng {
     //     true
@@ -100,8 +140,8 @@ pub fn ext_to_int(mpc: &MPC) -> MPC {
     // };
 
     // initialize order
-    // let mut order = mpc.order.take().unwrap_or(Order::new(nb, ng));
-    let mut order = Order::new(nb, ng);
+    // let mut order = mpc.order.take().unwrap_or(Order::new(nb, ng, nl));
+    let mut order = Order::new(nb, ng, nl);
 
     // save data with external ordering
     order.external = Some(Saved {
@@ -118,12 +158,12 @@ pub fn ext_to_int(mpc: &MPC) -> MPC {
     // }
 
     // determine which buses, branches, gens are connected & in-service
-    let bs = mpc
+    let bs: HashSet<usize> = mpc
         .bus
         .iter()
         .filter(|b| b.is_pq() || b.is_pv() || b.is_ref())
         .map(|b| b.bus_i)
-        .collect::<HashSet<usize>>();
+        .collect();
     for (i, b) in mpc.bus.iter().enumerate() {
         if b.is_pq() || b.is_pv() || b.is_ref() {
             order.bus.status.on.push(i);
@@ -150,10 +190,8 @@ pub fn ext_to_int(mpc: &MPC) -> MPC {
 
     // delete stuff that is "out"
     mpc.bus.retain(|b| b.is_pq() || b.is_pv() || b.is_ref());
-
     mpc.branch
         .retain(|br| br.is_on() && bs.contains(&br.f_bus) && bs.contains(&br.t_bus));
-
     mpc.gen.retain(|g| g.is_on() && bs.contains(&g.bus));
 
     // update sizes
@@ -190,9 +228,7 @@ pub fn ext_to_int(mpc: &MPC) -> MPC {
     order.gen.e2i = order.gen.i2e.clone();
     // }
 
-    if order.internal.is_some() {
-        order.internal = None;
-    }
+    order.internal = None;
     order.state = State::Internal;
     mpc.order = Some(order);
 
@@ -222,14 +258,14 @@ pub(crate) fn int_to_ext(mpc: &MPC) -> Result<MPC> {
 
     // Save data matrices with internal ordering & restore originals.
     let internal = Saved {
-        bus: mpc.bus.drain(..).collect_vec(),
-        branch: mpc.branch.drain(..).collect_vec(),
-        gen: mpc.gen.drain(..).collect_vec(),
+        bus: mpc.bus.drain(..).collect(),
+        branch: mpc.branch.drain(..).collect(),
+        gen: mpc.gen.drain(..).collect(),
     };
     if let Some(external) = order.external.as_mut() {
-        mpc.bus = external.bus.drain(..).collect_vec();
-        mpc.branch = external.branch.drain(..).collect_vec();
-        mpc.gen = external.gen.drain(..).collect_vec();
+        mpc.bus = external.bus.drain(..).collect();
+        mpc.branch = external.branch.drain(..).collect();
+        mpc.gen = external.gen.drain(..).collect();
     }
 
     // TODO: zero pad data matrices on right if necessary

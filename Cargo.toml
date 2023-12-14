@@ -6,6 +6,12 @@ edition = "2021"
 [dependencies]
 num-complex = "0.4.0"
 casecsv = { path = "../casecsv" }
-sparsetools = { path = "../sparsetools" }
-itertools = "0.11"
+sparsetools = "0.2"
+spsolve = { version = "0.1", features = ["rlu"] }
 anyhow = "1"
+clap = { version = "4.4.6", features = ["derive"] }
+log = "0.4"
+env_logger = "0.10"
+num-traits = "0.2"
+derive_builder = "0.12"
+pretty_dtoa = "0.3"

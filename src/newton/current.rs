@@ -1,175 +1,13 @@
 use crate::mpopt::MPOpt;
-use crate::powers::{d_imis_d_v, d_sbus_d_v, norm_inf, SBus, J};
-use crate::traits::LinearSolver;
+use crate::newton::ProgressMonitor;
+use crate::powers::{d_imis_d_v, norm_inf, SBus, J};
 
-use itertools::{izip, Itertools};
+use anyhow::Result;
 use num_complex::Complex64;
 use sparsetools::coo::Coo;
 use sparsetools::csr::{CCSR, CSR};
-
-pub trait ProgressMonitor {
-    fn update(&self, i: usize, norm_f: f64);
-}
-
-/// Solves power flow using full Newton's method (power/polar).
-///
-/// Solves for bus voltages using a full Newton-Raphson method, using nodal
-/// power balance equations and polar coordinate representation of
-/// voltages.
-///
-/// The bus voltage vector contains the set point for generator
-/// (including ref bus) buses, and the reference angle of the swing
-/// bus, as well as an initial guess for remaining magnitudes and
-/// angles.
-///
-/// Returns the final complex voltages, a flag which indicates whether it
-/// converged or not, and the number of iterations performed.
-pub(crate) fn newtonpf(
-    y_bus: &CSR<usize, Complex64>,
-    s_bus_fn: &dyn SBus,
-    v0: &[Complex64],
-    _ref: &[usize],
-    pv: &[usize],
-    pq: &[usize],
-    lin_solver: &dyn LinearSolver,
-    mpopt: &MPOpt,
-    progress: Option<&dyn ProgressMonitor>,
-) -> Result<(Vec<Complex64>, bool, usize), String> {
-    let nb = v0.len();
-    let pv_pq = [pv, pq].concat();
-
-    let tol = mpopt.pf.tolerance;
-    let max_it = mpopt.pf.max_it_nr;
-    // let lin_solver  = mpopt.pf.nr.lin_solver;
-
-    let mut converged = false;
-    let mut i = 0;
-    let mut v: Vec<Complex64> = v0.to_vec();
-    let mut va = v.iter().map(|v| v.arg()).collect_vec();
-    let mut vm = v.iter().map(|v| v.norm()).collect_vec();
-
-    // set up indexing for updating V
-    let npv = pv.len();
-    let npq = pq.len();
-    let (j1, j2) = (0, npv); // j1:j2 - V angle of pv buses
-    let (j3, j4) = (j2, j2 + npq); // j3:j4 - V angle of pq buses
-    let (j5, j6) = (j4, j4 + npq); // j5:j6 - V mag of pq buses
-
-    // let j1_j2 = j1..j2;
-    // let j3_j4 = j3..j4;
-    // let j5_j6 = j5..j6;
-
-    // let j1_j2 = 0..npv; // V angle of pv buses
-    // let j3_j4 = j1_j2.end..(j1_j2.end + npq); // V angle of pq buses
-    // let j5_j6 = j3_j4.end..(j3_j4.end + npq); // V mag of pq buses
-
-    // evaluate F(x0)
-    let i_bus: Vec<Complex64> = y_bus * &v;
-    let s_bus = s_bus_fn.s_bus(&vm);
-    // let mis = &v * (y_bus * &v).conj() - s_bus.s_bus(&vm);
-    // let mis: Vec<Complex64> = (0..nb).map(|i| v[i] * i_bus[i].conj() - s_bus[i]).collect();
-    let mis = izip!(&v, &i_bus, &s_bus)
-        .map(|(v, i_bus, s_bus)| v * i_bus.conj() - s_bus)
-        .collect_vec();
-    let f = [
-        pv_pq.iter().map(|&i| mis[i].re).collect_vec(),
-        pq.iter().map(|&i| mis[i].im).collect_vec(),
-    ]
-    .concat();
-
-    // check tolerance
-    let norm_f = norm_inf(&f);
-    if let Some(pm) = progress {
-        pm.update(i, norm_f);
-    }
-    if norm_f < tol {
-        converged = true;
-        println!("Converged!");
-    }
-
-    // do Newton iterations
-    while !converged && i < max_it {
-        // update iteration counter
-        i = i + 1;
-
-        // evaluate Jacobian
-        let (d_sbus_d_va, mut d_sbus_d_vm) = d_sbus_d_v(y_bus, &v, false);
-        let neg_d_sd_d_vm = s_bus_fn.d_sbus_d_vm(&vm);
-        d_sbus_d_vm = d_sbus_d_vm - neg_d_sd_d_vm;
-
-        let j11 = d_sbus_d_va.select(Some(&pv_pq), Some(&pv_pq))?.real();
-        let j12 = d_sbus_d_vm.select(Some(&pv_pq), Some(pq))?.real();
-        let j21 = d_sbus_d_va.select(Some(pq), Some(&pv_pq))?.imag();
-        let j22 = d_sbus_d_vm.select(Some(pq), Some(pq))?.imag();
-
-        let jac = Coo::compose([
-            [&j11.to_coo(), &j12.to_coo()],
-            [&j21.to_coo(), &j22.to_coo()],
-        ])?;
-
-        // compute update step
-        let neg_f: Vec<f64> = f.iter().map(|f| -f).collect();
-        let dx = lin_solver.solve(jac.to_csc(), &neg_f)?;
-
-        // update voltage
-        // pv.iter().zip(j1..j2).for_each(|(&i, j)| va[i] += dx[j]);
-        // pq.iter().zip(j3..j4).for_each(|(&i, j)| va[i] += dx[j]);
-        // pq.iter().zip(j5..j6).for_each(|(&i, j)| vm[i] += dx[j]);
-        for (i, j) in (j1..j2).enumerate() {
-            va[pv[i]] += dx[j];
-        }
-        for (i, j) in (j3..j4).enumerate() {
-            va[pq[i]] += dx[j];
-        }
-        for (i, j) in (j5..j6).enumerate() {
-            vm[pq[i]] += dx[j];
-        }
-
-        // update Vm and Va again in case we wrapped around with a negative Vm
-        // v = Vec::from_polar(&vm, &va);
-        v = izip!(vm, va)
-            .map(|(vm, va)| Complex64::from_polar(vm, va))
-            .collect();
-        va = v.iter().map(|v| v.arg()).collect();
-        vm = v.iter().map(|v| v.norm()).collect();
-
-        // evalute F(x)
-        let i_bus: Vec<Complex64> = y_bus * &v;
-        let s_bus = s_bus_fn.s_bus(&vm);
-        // let mis = &v * conj(&(y_bus * &v)) - s_bus.s_bus(&vm);
-        // let mis: Vec<Complex64> = (0..nb).map(|i| v[i] * i_bus[i].conj() - s_bus[i]).collect();
-        let mis = izip!(&v, &i_bus, &s_bus)
-            .map(|(v, i_bus, s_bus)| v * i_bus.conj() - s_bus)
-            .collect_vec();
-        let f = [
-            pv_pq.iter().map(|&i| mis[i].re).collect_vec(),
-            pq.iter().map(|&i| mis[i].im).collect_vec(),
-        ]
-        .concat();
-
-        // check for convergence
-        let norm_f = norm_inf(&f);
-        if let Some(pm) = progress {
-            pm.update(i, norm_f);
-        }
-        if norm_f < tol {
-            converged = true;
-            println!(
-                "Newton's method power flow (power balance, polar) converged in {} iterations.",
-                i
-            );
-        }
-    }
-
-    if !converged {
-        println!(
-            "Newton's method power flow (power balance, polar) did not converge in {} iterations.",
-            i
-        );
-    }
-
-    Ok((v, converged, i))
-}
+use spsolve::Solver;
+use std::iter::zip;
 
 /// Solves power flow using full Newton's method (current/cartesian).
 ///
@@ -188,13 +26,13 @@ pub(crate) fn newtonpf_i_polar(
     y_bus: &CSR<usize, Complex64>,
     s_bus_fn: &dyn SBus,
     v0: &[Complex64],
-    ref_: &[usize],
+    _ref: &[usize],
     pv: &[usize],
     pq: &[usize],
-    lin_solver: &dyn LinearSolver,
+    solver: &dyn Solver<usize, f64>,
     mpopt: &MPOpt,
     progress: Option<&dyn ProgressMonitor>,
-) -> Result<(Vec<Complex64>, bool, usize), String> {
+) -> Result<(Vec<Complex64>, bool, usize)> {
     let pv_pq = [pv, pq].concat();
 
     let tol = mpopt.pf.tolerance;
@@ -233,13 +71,13 @@ pub(crate) fn newtonpf_i_polar(
         // (0..nb)
         //     .map(|i| i_bus[i] - (s_bus[i] / v[i]).conj())
         //     .collect()
-        izip!(&i_bus, &s_bus, &v)
-            .map(|(i_bus, s_bus, v)| i_bus - (s_bus / v).conj())
-            .collect_vec()
+        zip(&v, zip(&i_bus, &s_bus))
+            .map(|(i_bus, (s_bus, v))| i_bus - (s_bus / v).conj())
+            .collect()
     };
     let f = [
-        pv_pq.iter().map(|&i| mis[i].re).collect_vec(),
-        pv_pq.iter().map(|&i| mis[i].im).collect_vec(),
+        pv_pq.iter().map(|&i| mis[i].re).collect::<Vec<_>>(),
+        pv_pq.iter().map(|&i| mis[i].im).collect::<Vec<_>>(),
     ]
     .concat();
 
@@ -250,13 +88,13 @@ pub(crate) fn newtonpf_i_polar(
     }
     if norm_f < tol {
         converged = true;
-        println!("Converged!");
+        log::info!("Converged!");
     }
 
-    fn compose(j: [[&Coo<usize, f64>; 3]; 2]) -> Result<Coo<usize, f64>, String> {
-        let j1x = Coo::h_stack(j[0][0], j[0][1], Some(j[0][2]))?;
-        let j2x = Coo::h_stack(j[1][0], j[1][1], Some(j[1][2]))?;
-        Coo::v_stack(&j1x, &j2x, None)
+    fn compose(j: [[&Coo<usize, f64>; 3]; 2]) -> Result<Coo<usize, f64>> {
+        let j1x = Coo::h_stack3(j[0][0], j[0][1], j[0][2])?;
+        let j2x = Coo::h_stack3(j[1][0], j[1][1], j[1][2])?;
+        Coo::v_stack(&j1x, &j2x)
     }
 
     // do Newton iterations
@@ -278,7 +116,7 @@ pub(crate) fn newtonpf_i_polar(
         J = [   j11 j12;
                 j21 j22;    ];
         */
-        let dImis_dQ = Coo::new(
+        let d_imis_d_q = Coo::new(
             nb,
             nb,
             pv.to_vec(),
@@ -286,7 +124,8 @@ pub(crate) fn newtonpf_i_polar(
             pv.iter().map(|&i| J / v[i].conj()).collect(),
         )?
         .to_csr();
-        let (dImis_dVa, dImis_dVm) = d_imis_d_v(&s_bus, &y_bus, &v, false)?;
+        let (d_imis_d_va, d_imis_d_vm) = d_imis_d_v(&s_bus, &y_bus, &v, false)?;
+        // TODO: dImis_dVm(:, pv) = dImis_dQ(:, pv);
 
         /*
         j11 = real(dImis_dVa([pv; pq], [pv; pq]));
@@ -299,22 +138,33 @@ pub(crate) fn newtonpf_i_polar(
         J = [   j11 j12 j13;
                 j21 j22 j23;    ];
         */
-        let j11 = dImis_dVa.select(Some(&pv_pq), Some(&pv_pq))?.real();
-        let j12 = dImis_dQ.select(Some(&pv_pq), Some(pv))?.real();
-        let j13 = dImis_dVm.select(Some(&pv_pq), Some(pq))?.real();
-        let j21 = dImis_dVa.select(Some(&pv_pq), Some(&pv_pq))?.imag();
-        let j22 = dImis_dQ.select(Some(&pv_pq), Some(pv))?.imag();
-        let j23 = dImis_dVm.select(Some(&pv_pq), Some(pq))?.imag();
+        let j11 = d_imis_d_va.select(Some(&pv_pq), Some(&pv_pq))?.real();
+        let j12 = d_imis_d_q.select(Some(&pv_pq), Some(pv))?.real();
+        let j13 = d_imis_d_vm.select(Some(&pv_pq), Some(pq))?.real();
+        let j21 = d_imis_d_va.select(Some(&pv_pq), Some(&pv_pq))?.imag();
+        let j22 = d_imis_d_q.select(Some(&pv_pq), Some(pv))?.imag();
+        let j23 = d_imis_d_vm.select(Some(&pv_pq), Some(pq))?.imag();
 
         let jac = compose([
             [&j11.to_coo(), &j12.to_coo(), &j13.to_coo()],
             [&j21.to_coo(), &j22.to_coo(), &j23.to_coo()],
-        ])?;
+        ])?
+        .to_csc();
 
         // compute update step
         // let dx = lin_solver.solve(jac.view(), f.iter().map(|&f_i| -f_i).collect())?;
-        let neg_f: Vec<f64> = f.iter().map(|f| -f).collect();
-        let dx = lin_solver.solve(jac.to_csc(), &neg_f)?;
+        let dx = {
+            let mut neg_f: Vec<f64> = f.iter().map(|f| -f).collect();
+            solver.solve(
+                jac.cols(),
+                jac.rowidx(),
+                jac.colptr(),
+                jac.values(),
+                &mut neg_f,
+                false,
+            )?;
+            neg_f
+        };
 
         // for (i, j) in (j1..j2).enumerate() {
         //     va[pv[i]] += dx[j];
@@ -361,7 +211,7 @@ pub(crate) fn newtonpf_i_polar(
 
         // update Vm and Va again in case we wrapped around with a negative Vm
         // v = Vec::from_polar(&vm, &va);
-        v = izip!(vm, va)
+        v = zip(vm, va)
             .map(|(vm, va)| Complex64::from_polar(vm, va))
             .collect();
         va = v.iter().map(|v| v.arg()).collect();
@@ -370,9 +220,9 @@ pub(crate) fn newtonpf_i_polar(
         // evalute F(x)
         // mis = Ybus * V - conj(Sb ./ V);
         let i_bus = y_bus * &v;
-        let mis = izip!(&i_bus, &s_bus, &v)
-            .map(|(i_bus, s_bus, v)| i_bus - (s_bus / v).conj())
-            .collect_vec();
+        let mis: Vec<_> = zip(&v, zip(&i_bus, &s_bus))
+            .map(|(i_bus, (s_bus, v))| i_bus - (s_bus / v).conj())
+            .collect();
         // let mis: Vec<Complex64> = (0..nb)
         //     .map(|i| i_bus[i] - (s_bus[i] / v[i]).conj())
         //     .collect();
@@ -390,7 +240,7 @@ pub(crate) fn newtonpf_i_polar(
         }
         if norm_f < tol {
             converged = true;
-            println!(
+            log::info!(
                 "Newton's method power flow (current balance, polar) converged in {} iterations.",
                 i
             );
@@ -398,7 +248,7 @@ pub(crate) fn newtonpf_i_polar(
     }
 
     if !converged {
-        println!(
+        log::info!(
             "Newton's method power flow (current balance, polar) did not converge in {} iterations.",
             i
         );
@@ -424,13 +274,13 @@ pub(crate) fn newtonpf_i_cart(
     y_bus: &CSR<usize, Complex64>,
     s_bus_fn: &dyn SBus,
     v0: &[Complex64],
-    ref_: &[usize],
+    _ref: &[usize],
     pv: &[usize],
     pq: &[usize],
-    lin_solver: &dyn LinearSolver,
+    solver: &dyn Solver<usize, f64>,
     mpopt: &MPOpt,
     progress: Option<&dyn ProgressMonitor>,
-) -> Result<(Vec<Complex64>, bool, usize), String> {
+) -> Result<(Vec<Complex64>, bool, usize)> {
     let pv_pq = [pv, pq].concat();
 
     let tol = mpopt.pf.tolerance;
@@ -440,7 +290,7 @@ pub(crate) fn newtonpf_i_cart(
     let mut i = 0;
     let mut v = v0.to_vec();
     // let mut va: Vec<f64> = v.iter().map(|v| v.arg()).collect();
-    let mut vm: Vec<f64> = v.iter().map(|v| v.norm()).collect();
+    let vm: Vec<f64> = v.iter().map(|v| v.norm()).collect();
     // let vm_pv = pv.iter().map(|&i| vm[i]).collect();
     let nb = v0.len();
 
@@ -460,7 +310,7 @@ pub(crate) fn newtonpf_i_cart(
 
     // evaluate F(x0)
     let mut s_bus = s_bus_fn.s_bus(&vm);
-    let mis = {
+    let mis: Vec<_> = {
         // let ybus_pv = y_bus.select(Some(&pv), None)?;
         // let i_bus_pv: Vec<Complex64> = ybus_pv * &v;
         // for i in 0..npv {
@@ -470,17 +320,17 @@ pub(crate) fn newtonpf_i_cart(
         pv.iter()
             .for_each(|&i| s_bus[i].im = (v[i] * i_bus[i]).conj().im);
 
-        izip!(&i_bus, &s_bus, &v)
-            .map(|(i_bus, s_bus, v)| i_bus - (s_bus / v).conj())
-            .collect_vec()
+        zip(&v, zip(&i_bus, &s_bus))
+            .map(|(i_bus, (s_bus, v))| i_bus - (s_bus / v).conj())
+            .collect()
     };
 
-    let f = [
-        pv_pq.iter().map(|&i| mis[i].re).collect_vec(),
-        pv_pq.iter().map(|&i| mis[i].im).collect_vec(),
+    let f: Vec<_> = [
+        pv_pq.iter().map(|&i| mis[i].re).collect::<Vec<_>>(),
+        pv_pq.iter().map(|&i| mis[i].im).collect(),
         pv.iter()
             .map(|&i| (v[i] * v[i].conj()).re - (vm[i] * vm[i]))
-            .collect_vec(),
+            .collect(),
     ]
     .concat();
 
@@ -508,7 +358,7 @@ pub(crate) fn newtonpf_i_cart(
     }
     if norm_f < tol {
         converged = true;
-        println!("Converged!"); // TODO: verbose feature
+        log::info!("Converged!");
     }
 
     // do Newton iterations
@@ -524,7 +374,7 @@ pub(crate) fn newtonpf_i_cart(
         [dImis_dVr, dImis_dVi] = dImis_dV(Sb, Ybus, V, 1);
              */
         // let v_pv = v.select(&pv);
-        let dImis_dQ = Coo::new(
+        let d_imis_d_q = Coo::new(
             nb,
             nb,
             pv.to_vec(),
@@ -532,7 +382,7 @@ pub(crate) fn newtonpf_i_cart(
             pv.iter().map(|&i| J / v[i].conj()).collect(),
         )?
         .to_csr();
-        let dV2_dVr = Coo::new(
+        let d_v2_d_vr = Coo::new(
             npv,
             npv + npq,
             (0..npv).collect(),
@@ -540,7 +390,7 @@ pub(crate) fn newtonpf_i_cart(
             pv.iter().map(|&i| 2.0 * v[i].re).collect(),
         )?
         .to_csr();
-        let dV2_dVi = Coo::new(
+        let d_v2_d_vi = Coo::new(
             npv,
             npv + npq,
             (0..npv).collect(),
@@ -548,22 +398,22 @@ pub(crate) fn newtonpf_i_cart(
             pv.iter().map(|&i| 2.0 * v[i].im).collect(),
         )?
         .to_csr();
-        let (dImis_dVr, dImis_dVi) = d_imis_d_v(&s_bus, &y_bus, &v, true)?;
+        let (d_imis_d_vr, d_imis_d_vi) = d_imis_d_v(&s_bus, &y_bus, &v, true)?;
 
         // handling of derivatives for voltage dependent loads
         // (not yet implemented) goes here
 
-        let j11 = dImis_dQ.select(Some(pv), Some(pv))?.real();
-        let j12 = dImis_dVr.select(Some(&pv_pq), Some(&pv_pq))?.real();
-        let j13 = dImis_dVi.select(Some(&pv_pq), Some(&pv_pq))?.real();
+        let j11 = d_imis_d_q.select(Some(pv), Some(pv))?.real();
+        let j12 = d_imis_d_vr.select(Some(&pv_pq), Some(&pv_pq))?.real();
+        let j13 = d_imis_d_vi.select(Some(&pv_pq), Some(&pv_pq))?.real();
 
-        let j21 = dImis_dQ.select(Some(&pv_pq), Some(&pv))?.imag();
-        let j22 = dImis_dVr.select(Some(&pv_pq), Some(&pv_pq))?.imag();
-        let j23 = dImis_dVi.select(Some(&pv_pq), Some(&pv_pq))?.imag();
+        let j21 = d_imis_d_q.select(Some(&pv_pq), Some(&pv))?.imag();
+        let j22 = d_imis_d_vr.select(Some(&pv_pq), Some(&pv_pq))?.imag();
+        let j23 = d_imis_d_vi.select(Some(&pv_pq), Some(&pv_pq))?.imag();
 
-        let j31 = CSR::zeros(npv, npv);
-        let j32 = dV2_dVr;
-        let j33 = dV2_dVi;
+        let j31 = CSR::with_size(npv, npv);
+        let j32 = d_v2_d_vr;
+        let j33 = d_v2_d_vi;
         /*
         j11 = real(dImis_dQ([pv; pq], pv));
         j12 = real(dImis_dVr([pv; pq], [pq; pv]));
@@ -582,11 +432,22 @@ pub(crate) fn newtonpf_i_cart(
             [&j11.to_coo(), &j12.to_coo(), &j13.to_coo()],
             [&j21.to_coo(), &j22.to_coo(), &j23.to_coo()],
             [&j31.to_coo(), &j32.to_coo(), &j33.to_coo()],
-        ])?;
+        ])?
+        .to_csc();
 
         // compute update step
-        let neg_f = f.iter().map(|f| -f).collect_vec();
-        let dx: Vec<f64> = lin_solver.solve(jac.to_csc(), &neg_f)?;
+        let dx = {
+            let mut neg_f: Vec<f64> = f.iter().map(|f| -f).collect();
+            solver.solve(
+                jac.cols(),
+                jac.rowidx(),
+                jac.colptr(),
+                jac.values(),
+                &mut neg_f,
+                false,
+            )?;
+            neg_f
+        };
 
         // update voltage
         if npv != 0 {
@@ -635,15 +496,15 @@ pub(crate) fn newtonpf_i_cart(
         // let mis = (0..nb)
         //     .map(|i| i_bus[i] - (s_bus[i] / v[i]).conj())
         //     .collect::<Vec<Complex64>>();
-        let mis = izip!(&i_bus, &s_bus, &v)
-            .map(|(i_bus, s_bus, v)| i_bus - (s_bus / v).conj())
-            .collect_vec();
-        let f = [
-            pv_pq.iter().map(|&i| mis[i].re).collect_vec(),
-            pv_pq.iter().map(|&i| mis[i].im).collect_vec(),
+        let mis: Vec<_> = zip(&v, zip(&i_bus, &s_bus))
+            .map(|(i_bus, (s_bus, v))| i_bus - (s_bus / v).conj())
+            .collect();
+        let f: Vec<_> = [
+            pv_pq.iter().map(|&i| mis[i].re).collect::<Vec<_>>(),
+            pv_pq.iter().map(|&i| mis[i].im).collect(),
             pv.iter()
                 .map(|&i| (v[i] * v[i].conj()).re - (vm[i] * vm[i]))
-                .collect_vec(),
+                .collect(),
         ]
         .concat();
 
@@ -654,8 +515,7 @@ pub(crate) fn newtonpf_i_cart(
         }
         if norm_f < tol {
             converged = true;
-            // TODO: verbose feature
-            println!(
+            log::info!(
                 "Newton's method power flow (current balance, cartesian) converged in {} iterations.",
                 i
             );
@@ -663,7 +523,7 @@ pub(crate) fn newtonpf_i_cart(
     }
 
     if !converged {
-        println!(
+        log::info!(
             "Newton's method power flow (current balance, cartesian) did not converge in {} iterations.",
             i
         );
@@ -685,17 +545,17 @@ pub(crate) fn newtonpf_i_cart(
 ///
 /// Returns the final complex voltages, a flag which indicates whether it
 /// converged or not, and the number of iterations performed.
-pub(crate) fn newtonpf_I_hybrid(
+pub(crate) fn newtonpf_i_hybrid(
     y_bus: &CSR<usize, Complex64>,
     s_bus_fn: &dyn SBus,
     v0: &[Complex64],
     _ref: &[usize],
     pv: &[usize],
     pq: &[usize],
-    lin_solver: &dyn LinearSolver,
+    _solver: &dyn Solver<usize, f64>,
     mpopt: &MPOpt,
     progress: Option<&dyn ProgressMonitor>,
-) -> Result<(Vec<Complex64>, bool, usize), String> {
+) -> Result<(Vec<Complex64>, bool, usize)> {
     let pv_pq = [pv, pq].concat();
 
     let tol = mpopt.pf.tolerance;
@@ -703,24 +563,24 @@ pub(crate) fn newtonpf_I_hybrid(
 
     let mut converged = false;
     let mut i = 0;
-    let mut v = v0.to_vec();
-    let mut va = v.iter().map(|v| v.arg()).collect_vec();
-    let mut vm = v.iter().map(|v| v.norm()).collect_vec();
+    let v = v0.to_vec();
+    // let mut va = v.iter().map(|v| v.arg()).collect_vec();
+    let vm: Vec<_> = v.iter().map(|v| v.norm()).collect();
     // let vm_pv = vm.select(pv);
-    let nb = v0.len();
+    // let n = v0.len();
 
     // set up indexing for updating V
     let npv = pv.len();
     let npq = pq.len();
-    let (j1, j2) = (0, npv); // j1:j2 - Q of pv buses
-    let (j3, j4) = (j2, j2 + npq); // j3:j4 - Vr of pq buses
-    let (j5, j6) = (j4, j4 + npv); // j5:j6 - Vi of pv buses
-    let (j7, j8) = (j6, j6 + npq); // j7:j8 - Vi of pq buses
+    let (_j1, j2) = (0, npv); // j1:j2 - Q of pv buses
+    let (_j3, j4) = (j2, j2 + npq); // j3:j4 - Vr of pq buses
+    let (_j5, j6) = (j4, j4 + npv); // j5:j6 - Vi of pv buses
+    let (_j7, _j8) = (j6, j6 + npq); // j7:j8 - Vi of pq buses
 
     // evaluate F(x0)
     let mut s_bus = s_bus_fn.s_bus(&vm);
     // Sb(pv) = real(Sb(pv)) + 1j * imag(V(pv) .* conj(Ybus(pv, :) * V));
-    let mis = {
+    let mis: Vec<_> = {
         // let ybus_pv = y_bus.select(Some(&pv), None)?;
         // let i_bus_pv: Vec<Complex64> = ybus_pv * &v;
         // for i in 0..npv {
@@ -730,17 +590,17 @@ pub(crate) fn newtonpf_I_hybrid(
         pv.iter()
             .for_each(|&i| s_bus[i].im = (v[i] * i_bus[i]).conj().im);
 
-        izip!(i_bus, s_bus, v)
-            .map(|(i_bus, s_bus, v)| i_bus - (s_bus / v).conj())
-            .collect_vec()
+        zip(&v, zip(&i_bus, &s_bus))
+            .map(|(i_bus, (s_bus, v))| i_bus - (s_bus / v).conj())
+            .collect()
         // (0..nb)
         //     .map(|i| i_bus[i] - (s_bus[i] / v[i]).conj())
         //     .collect()
     };
 
-    let f: Vec<f64> = [
-        pv_pq.iter().map(|&i| mis[i].re).collect::<Vec<f64>>(),
-        pv_pq.iter().map(|&i| mis[i].im).collect::<Vec<f64>>(),
+    let f = [
+        pv_pq.iter().map(|&i| mis[i].re).collect::<Vec<_>>(),
+        pv_pq.iter().map(|&i| mis[i].im).collect::<Vec<_>>(),
     ]
     .concat();
 
@@ -751,42 +611,27 @@ pub(crate) fn newtonpf_I_hybrid(
     }
     if norm_f < tol {
         converged = true;
-        println!("Converged!"); // TODO: verbose feature
+        log::info!("Converged!");
     }
 
     // do Newton iterations
     while !converged && i < max_it {
         // update iteration counter
         i = i + 1;
+
+        // evaluate Jacobian
+        /*
+        dImis_dQ = sparse(1:n, 1:n, 1j./conj(V), n, n);
+        [dImis_dVr, dImis_dVi] = dImis_dV(Sb, Ybus, V, 1);
+        dImis_dVi(:, pv) = ...
+            dImis_dVi(:, pv) * sparse(1:npv, 1:npv, real(V(pv)), npv, npv) - ...
+            dImis_dVr(:, pv) * sparse(1:npv, 1:npv, imag(V(pv)), npv, npv);
+        dImis_dVr(:, pv) = dImis_dQ(:, pv);
+        */
+
+        // let d_imis_d_q = Coo::with_diagonal(v.iter().map(|&vi| J / vi.conj()).collect()).to_csr();
+        // let (d_imis_d_vr, d_imis_d_vi) = d_imis_d_v(&s_bus, &y_bus, &v, true)?;
     }
 
-    Err("not implemented".to_string())
-}
-
-pub(crate) fn newtonpf_S_cart(
-    _y_bus: &CSR<usize, Complex64>,
-    _s_bus: &dyn SBus,
-    _v0: &[Complex64],
-    _ref: &[usize],
-    _pv: &[usize],
-    _pq: &[usize],
-    _lin_solver: &dyn LinearSolver,
-    _mpopt: &MPOpt,
-    _progress: Option<&dyn ProgressMonitor>,
-) -> Result<(Vec<Complex64>, bool, usize), String> {
-    Err("not implemented".to_string())
-}
-
-pub(crate) fn newtonpf_S_hybrid(
-    _y_bus: &CSR<usize, Complex64>,
-    _s_bus: &dyn SBus,
-    _v0: &[Complex64],
-    _ref: &[usize],
-    _pv: &[usize],
-    _pq: &[usize],
-    _lin_solver: &dyn LinearSolver,
-    _mpopt: &MPOpt,
-    _progress: Option<&dyn ProgressMonitor>,
-) -> Result<(Vec<Complex64>, bool, usize), String> {
-    Err("not implemented".to_string())
+    unimplemented!("newtonpf_i_hybrid")
 }

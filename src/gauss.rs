@@ -1,8 +1,10 @@
 use crate::mpopt::MPOpt;
 use crate::powers::SBus;
-use crate::traits::LinearSolver;
+
+use anyhow::{format_err, Result};
 use num_complex::Complex64;
 use sparsetools::csr::CSR;
+use spsolve::Solver;
 
 pub trait ProgressMonitor {
     fn update(&self, i: usize, norm_f: f64);
@@ -25,15 +27,15 @@ impl ProgressMonitor for PrintProgress {
 }
 
 pub(crate) fn gausspf(
-    y_bus: &CSR<usize, Complex64>,
-    s_bus: &dyn SBus,
-    v0: &[Complex64],
+    _y_bus: &CSR<usize, Complex64>,
+    _s_bus: &dyn SBus,
+    _v0: &[Complex64],
     _ref: &[usize],
-    pv: &[usize],
-    pq: &[usize],
-    lin_solver: &dyn LinearSolver,
-    mpopt: &MPOpt,
-    progress: Option<&dyn ProgressMonitor>,
-) -> Result<(Vec<Complex64>, bool, usize), String> {
-    Err("not implemented".to_string())
+    _pv: &[usize],
+    _pq: &[usize],
+    _solver: &dyn Solver<usize, f64>,
+    _mpopt: &MPOpt,
+    _progress: Option<&dyn ProgressMonitor>,
+) -> Result<(Vec<Complex64>, bool, usize)> {
+    Err(format_err!("not implemented"))
 }

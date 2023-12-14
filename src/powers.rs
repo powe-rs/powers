@@ -4,14 +4,15 @@
 
 use crate::mpopt::MPOpt;
 
+use anyhow::Result;
 use casecsv::*;
-use itertools::{izip, Itertools};
 use num_complex::Complex64;
 use sparsetools::coo::Coo;
 use sparsetools::csr::CCSR;
 use sparsetools::csr::CSR;
 use std::collections::HashSet;
 use std::f64::consts::PI;
+use std::iter::zip;
 
 pub(crate) const J: Complex64 = Complex64 { re: 0.0, im: 1.0 };
 
@@ -149,10 +150,10 @@ pub(crate) fn make_sbus(
 pub(crate) fn make_d_sbus_d_vm(
     base_mva: f64,
     bus: &[Bus],
-    gen: &[Gen],
+    _gen: &[Gen],
     mpopt: &MPOpt,
     vm: Option<&[f64]>,
-    sg: Option<&[Complex64]>,
+    _sg: Option<&[Complex64]>,
 ) -> CSR<usize, Complex64> {
     let nb = bus.len();
     let base_mva = Complex64::new(base_mva, 0.0);
@@ -177,10 +178,10 @@ pub(crate) fn make_d_sbus_d_vm(
                     Complex64::default()
                 }
             })
-            .collect_vec();
-        Coo::with_diagonal(&diag).to_csr()
+            .collect();
+        CSR::with_diagonal(diag)
     } else {
-        Coo::empty(nb, nb, 0).to_csr()
+        CSR::with_size(nb, nb)
     }
 }
 
@@ -230,14 +231,14 @@ pub(crate) fn make_ybus(
     //      | If |   | Yff  Yft |   | Vf |
     //      |    | = |          | * |    |
     //      | It |   | Ytf  Ytt |   | Vt |
-    let mut y_bus = Coo::empty(nb, nb, 0);
+    let mut y_bus = Coo::with_size(nb, nb);
     let mut y_f = if yf_yt {
-        Some(Coo::empty(nl, nb, 0))
+        Some(Coo::with_size(nl, nb))
     } else {
         None
     };
     let mut y_t = if yf_yt {
-        Some(Coo::empty(nl, nb, 0))
+        Some(Coo::with_size(nl, nb))
     } else {
         None
     };
@@ -281,7 +282,7 @@ pub(crate) fn make_ybus(
         .map(|b| Complex64::new(b.gs, b.bs) / Complex64::new(base_mva, 0.0))
         .collect::<Vec<Complex64>>();
 
-    for (i, b) in bus.iter().enumerate() {
+    for (i, _) in bus.iter().enumerate() {
         y_bus.push(i, i, y_sh[i]);
     }
     (y_bus, y_f, y_t)
@@ -411,8 +412,8 @@ pub(crate) fn d_sbus_d_v(
 ) -> (CSR<usize, Complex64>, CSR<usize, Complex64>) {
     let i_bus = y_bus * v;
 
-    let diag_v = CSR::<usize, Complex64>::with_diag(v.to_vec());
-    let diag_i_bus = CSR::<usize, Complex64>::with_diag(i_bus);
+    let diag_v = CSR::<usize, Complex64>::with_diagonal(v.to_vec());
+    let diag_i_bus = CSR::<usize, Complex64>::with_diagonal(i_bus);
 
     if cartesian {
         // dSbus/dVr = conj(diagIbus) + diagV * conj(Ybus)
@@ -427,14 +428,16 @@ pub(crate) fn d_sbus_d_v(
             .iter()
             .map(|v| v / Complex64::new(v.norm(), 0.0))
             .collect();
-        let diag_v_norm = CSR::<usize, Complex64>::with_diag(v_norm);
+        let diag_v_norm = CSR::<usize, Complex64>::with_diagonal(v_norm);
 
         // dSbus/dVa = 1j * diagV * conj(diagIbus - Ybus * diagV)
         // dSbus/dVm = diagV * conj(Ybus * diagVnorm) + conj(diagIbus) * diagVnorm
 
-        let d_sbus_d_va = &diag_v * (&diag_i_bus - y_bus * &diag_v).conj() * J;
+        let mut d_sbus_d_va = &diag_v * (&diag_i_bus - y_bus * &diag_v).conj() * J;
         let d_sbus_d_vm =
             &diag_v * (y_bus * &diag_v_norm).conj() + diag_i_bus.conj() * &diag_v_norm;
+
+        d_sbus_d_va.sort_indexes();
 
         (d_sbus_d_va, d_sbus_d_vm)
     }
@@ -452,7 +455,7 @@ pub(crate) fn d_imis_d_v(
     y_bus: &CSR<usize, Complex64>,
     v: &[Complex64],
     vcart: bool,
-) -> Result<(CSR<usize, Complex64>, CSR<usize, Complex64>), String> {
+) -> Result<(CSR<usize, Complex64>, CSR<usize, Complex64>)> {
     let n = v.len();
 
     let (d_imis_d_v1, d_imis_d_v2) = if vcart {
@@ -465,9 +468,9 @@ pub(crate) fn d_imis_d_v(
             (0..n).collect(),
             (0..n).collect(),
             // (0..n).map(|i| (s_bus[i] / (v[i] * v[i]).conj())).collect(),
-            izip!(s_bus, v)
+            zip(s_bus, v)
                 .map(|(s_bus, v)| s_bus / (v * v).conj())
-                .collect_vec(),
+                .collect(),
         )?
         .to_csr();
         let d_imis_d_v1 = y_bus + &diag_sv2c; // dImis/dVr
@@ -480,23 +483,23 @@ pub(crate) fn d_imis_d_v(
         let v_norm = v
             .iter()
             .map(|v| v / Complex64::new(v.norm(), 0.0))
-            .collect_vec();
+            .collect();
         // let i_bus: Vec<Complex64> = (0..n).map(|i| s_bus[i] / v[i]).collect();
-        let i_bus = izip!(s_bus, v).map(|(s_bus, v)| s_bus / v).collect_vec();
-        let i_bus_vm: Vec<Complex64> = izip!(&i_bus, v)
+        let i_bus = zip(s_bus, v).map(|(s_bus, v)| s_bus / v).collect();
+        let i_bus_vm: Vec<Complex64> = zip(&i_bus, v)
             .map(|(i_bus, v)| i_bus / Complex64::new(v.norm(), 0.0))
-            .collect_vec();
+            .collect();
         /*
         diagV       = sparse(1:n, 1:n, V, n, n);
         diagIbus    = sparse(1:n, 1:n, Ibus, n, n);
         diagIbusVm  = sparse(1:n, 1:n, Ibus./Vm, n, n);
         diagVnorm   = sparse(1:n, 1:n, V./abs(V), n, n);
         */
-        let diag_v = CSR::with_diag(v.to_vec());
-        let diag_ibus = CSR::with_diag(i_bus);
-        let diag_ibus_vm = CSR::with_diag(i_bus_vm);
+        let diag_v = CSR::with_diagonal(v.to_vec());
+        let diag_ibus = CSR::with_diagonal(i_bus);
+        let diag_ibus_vm = CSR::with_diagonal(i_bus_vm);
         // let diag_v_norm = CSR::with_diag((v / v.norm()).to_vec());
-        let diag_v_norm = CSR::with_diag(v_norm);
+        let diag_v_norm = CSR::with_diagonal(v_norm);
 
         let d_imis_d_v1 = J * (y_bus * diag_v - diag_ibus); // dImis/dVa
         let d_imis_d_v2 = y_bus * diag_v_norm + diag_ibus_vm; // dImis/dVm
@@ -505,22 +508,6 @@ pub(crate) fn d_imis_d_v(
     };
 
     Ok((d_imis_d_v1, d_imis_d_v2))
-}
-
-/// Sorts the elements of a into ascending order in-place and
-/// returns the new indexes of the elements.
-pub(crate) fn argsort(a: &mut [usize], reverse: bool) -> Vec<usize> {
-    let a0 = a.to_vec(); // FIXME: avoid copy
-    let mut ix: Vec<usize> = (0..a.len()).collect();
-    // ix.sort_by_key(|&i| a[i]);
-    ix.sort_unstable_by(|&i, &j| a[i].partial_cmp(&a[j]).unwrap());
-    if reverse {
-        ix.reverse()
-    }
-    for (i, &j) in ix.iter().enumerate() {
-        a[i] = a0[j];
-    }
-    ix
 }
 
 /// Computes the infinity norm: `max(abs(a))`

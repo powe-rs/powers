@@ -1,4 +1,5 @@
 mod dc;
+// mod dense;
 mod fd;
 mod gauss;
 mod loadcase;
@@ -8,8 +9,13 @@ mod newton;
 mod order;
 mod pf;
 mod powers;
+// mod ptdf;
+pub(crate) mod debug;
 mod radial;
 mod total_load;
-mod traits;
 
+pub use loadcase::*;
+pub use mpc::*;
+pub use mpopt::*;
 pub use pf::*;
+pub use total_load::*;

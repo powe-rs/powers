@@ -51,7 +51,7 @@ pub enum LoadType {
 ///
 /// `nominal` -  use nominal load for dispatchable loads. Otherwise, use
 /// actual realized load for dispatchable loads
-pub(crate) fn total_load(
+pub fn total_load(
     bus: &[Bus],
     gen: Option<&[Gen]>,
     load_zone: LoadZone,

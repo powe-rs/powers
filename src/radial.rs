@@ -1,12 +1,13 @@
 use crate::{mpc::MPC, mpopt::MPOpt};
+use anyhow::Result;
 use casecsv::{Branch, Bus, Gen};
 
 pub(crate) fn radial_pf(
-    base_mva: f64,
-    bus0: &[Bus],
-    gen0: &[Gen],
-    branch0: &[Branch],
-    mpopt: &MPOpt,
-) -> Result<(MPC, bool, usize), String> {
-    Err("not implemented".to_string())
+    _base_mva: f64,
+    _bus0: &[Bus],
+    _gen0: &[Gen],
+    _branch0: &[Branch],
+    _mpopt: &MPOpt,
+) -> Result<(MPC, bool, usize)> {
+    unimplemented!("radial power flow")
 }

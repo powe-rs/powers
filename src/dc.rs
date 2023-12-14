@@ -1,10 +1,12 @@
 use crate::powers::norm_inf;
-use crate::traits::LinearSolver;
+
+use anyhow::Result;
 use casecsv::{Branch, Bus};
-use itertools::{izip, Itertools};
 use sparsetools::coo::Coo;
 use sparsetools::csr::CSR;
+use spsolve::Solver;
 use std::f64::consts::PI;
+use std::iter::zip;
 
 /// Solves a DC power flow.
 ///
@@ -20,8 +22,8 @@ pub(crate) fn dc_pf(
     ref_: &[usize],
     pv: &[usize],
     pq: &[usize],
-    lin_solver: &dyn LinearSolver,
-) -> Result<(Vec<f64>, bool), String> {
+    solver: &dyn Solver<usize, f64>,
+) -> Result<(Vec<f64>, bool)> {
     let va_threshold = 1e5; // arbitrary threshold on |Va| for declaring failure
 
     // initialize result vector
@@ -36,14 +38,24 @@ pub(crate) fn dc_pf(
 
     let b_pvpq = b_mat.select(Some(&pvpq), Some(&pvpq))?;
     let b_ref = b_mat.select(Some(&pvpq), Some(ref_))?;
-    let p_bus_pvpq = pvpq.iter().map(|&i| p_bus[i]).collect_vec();
-    let va_ref = ref_.iter().map(|&i| va0[i]).collect_vec();
+    let p_bus_pvpq: Vec<f64> = pvpq.iter().map(|&i| p_bus[i]).collect();
+    let va_ref: Vec<f64> = ref_.iter().map(|&i| va0[i]).collect();
 
-    let rhs = izip!(p_bus_pvpq, b_ref * &va_ref)
+    let mut rhs: Vec<f64> = zip(p_bus_pvpq, b_ref * &va_ref)
         .map(|(p_bus, p_ref)| p_bus - p_ref)
-        .collect_vec();
+        .collect();
 
-    let va_pvpq = lin_solver.solve(b_pvpq.to_csc(), &rhs)?;
+    let va_pvpq = {
+        solver.solve(
+            b_pvpq.cols(),
+            b_pvpq.colidx(),
+            b_pvpq.rowptr(),
+            b_pvpq.values(),
+            &mut rhs,
+            true,
+        )?;
+        rhs
+    };
 
     pvpq.iter()
         .enumerate()
@@ -79,9 +91,9 @@ pub(crate) fn make_b_dc(
 
     // Build Bf such that Bf * Va is the vector of real branch powers injected
     // at each branch's "from" bus.
-    let mut b_f = Coo::empty(rows, cols, nnz);
+    let mut b_f = Coo::with_capacity(rows, cols, nnz);
     // Build connection matrix Cft = Cf - Ct for line and from - to buses.
-    let mut c_ft = Coo::empty(rows, cols, nnz); // connection matrix
+    let mut c_ft = Coo::with_capacity(rows, cols, nnz); // connection matrix
 
     fn br_b(br: &Branch) -> f64 {
         let b = if br.is_on() { 1.0 / br.x } else { 0.0 }; // series susceptance
@@ -100,17 +112,18 @@ pub(crate) fn make_b_dc(
         c_ft.push(i, t, -1.0);
     }
     let b_f = b_f.to_csr();
-    let c_ft = c_ft.to_csr();
+    let c_ft = c_ft.to_csc();
 
-    let b_bus = &c_ft.t() * &b_f;
+    let mut b_bus = &c_ft.t() * &b_f;
+    b_bus.sort_indexes();
 
     // Build phase shift injection vectors.
-    let pfinj = branch
+    let pfinj: Vec<f64> = branch
         .iter()
         .map(|br| br_b(br) * -br.shift * PI / 180.0)
-        .collect::<Vec<f64>>(); // injected at the from bus ...
+        .collect(); // injected at the from bus ...
 
-    let pbusinj = &c_ft.t() * &pfinj; // ... and extracted at the to bus
+    let pbusinj = c_ft.transpose() * &pfinj; // ... and extracted at the to bus
 
     (b_bus, b_f, pbusinj, pfinj)
 }

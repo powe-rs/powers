@@ -1,9 +1,10 @@
 use crate::order::Order;
 use casecsv::{Branch, Bus, Gen};
-use sparsetools::csr::CSR;
 
 #[derive(Clone, Default)]
 pub struct MPC {
+    pub name: String,
+
     /// System MVA base used for converting power into per-unit quantities.
     /// Default value is 100.
     pub base_mva: f64,
@@ -20,9 +21,8 @@ pub struct MPC {
     // pub areas: Option<Vec<Area>>,
     pub(crate) order: Option<Order>,
 
-    pub(crate) a_mat: Option<CSR<usize, f64>>,
-    pub(crate) n_mat: Option<CSR<usize, f64>>,
-
+    // pub(crate) a_mat: Option<CSR<usize, f64>>,
+    // pub(crate) n_mat: Option<CSR<usize, f64>>,
     pub(crate) success: Option<bool>,
     pub(crate) iterations: Option<usize>,
 }

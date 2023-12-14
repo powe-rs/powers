@@ -1,4 +1,6 @@
-#[derive(Debug, PartialEq, Copy, Clone)]
+use clap::ValueEnum;
+
+#[derive(Debug, PartialEq, Copy, Clone, ValueEnum)]
 pub enum Alg {
     /// Newton's method.
     NR = 0,
@@ -42,6 +44,7 @@ pub enum GenQLimits {
     OneAtATime = 2,
 }
 
+#[derive(Default)]
 pub struct MPOpt {
     // Linearized DC power flow that assumes lossless branches,
     // 1pu voltages and small voltage angle differences.
@@ -50,6 +53,7 @@ pub struct MPOpt {
     pub pf: PFOpt,
     pub exp: ExpOpt,
 }
+
 pub struct PFOpt {
     // AC power flow algorithm.
     pub algorithm: Alg,
@@ -72,10 +76,28 @@ pub struct PFOpt {
     pub summation_method: Sum,
 }
 
+impl Default for PFOpt {
+    fn default() -> Self {
+        Self {
+            algorithm: Alg::NR,
+            tolerance: 1e-8,
+            max_it_nr: 10,
+            max_it_fd: 30,
+            max_it_gs: 1000,
+            enforce_q_limits: GenQLimits::IgnoreLimits,
+            current_balance: NodalBalance::POWER,
+            v_cartesian: BusVoltage::POLAR,
+            summation_method: Sum::POWER,
+        }
+    }
+}
+
+#[derive(Default)]
 pub struct ExpOpt {
     pub sys_wide_zip_loads: SysWideZipLoads,
 }
 
+#[derive(Default)]
 pub struct SysWideZipLoads {
     pub pw: Option<[f64; 3]>,
     pub qw: Option<[f64; 3]>,

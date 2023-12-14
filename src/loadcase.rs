@@ -19,6 +19,7 @@ pub fn load_case(case_path: &PathBuf) -> Result<MPC> {
     };
 
     let mpc = MPC {
+        name: case.name,
         base_mva: case.base_mva,
         bus,
         gen,

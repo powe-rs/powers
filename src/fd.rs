@@ -1,10 +1,12 @@
 use crate::mpopt::{Alg, MPOpt};
 use crate::powers::{make_ybus, SBus};
-use crate::traits::LinearSolver;
+
+use anyhow::{format_err, Result};
 use casecsv::{Branch, Bus};
 use num_complex::Complex64;
 use sparsetools::coo::{CCoo, Coo};
 use sparsetools::csr::CSR;
+use spsolve::Solver;
 
 /// Solves the power flow using a fast decoupled method.
 ///
@@ -30,11 +32,11 @@ pub(crate) fn fdpf(
     _ref: &[usize],
     _pv: &[usize],
     _pq: &[usize],
-    _lin_solver: &dyn LinearSolver,
+    _solver: &dyn Solver<usize, f64>,
     _mpopt: &MPOpt,
     _progress: Option<&dyn ProgressMonitor>,
-) -> Result<(Vec<Complex64>, bool, usize), String> {
-    Err("not implemented".to_string())
+) -> Result<(Vec<Complex64>, bool, usize)> {
+    Err(format_err!("not implemented"))
 }
 
 /// Builds the two matrices B prime and B double prime used in the fast
