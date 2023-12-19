@@ -96,7 +96,7 @@ pub(crate) fn make_b_dc(
     let mut c_ft = Coo::with_capacity(rows, cols, nnz); // connection matrix
 
     fn br_b(br: &Branch) -> f64 {
-        let b = if br.is_on() { 1.0 / br.x } else { 0.0 }; // series susceptance
+        let b = if br.is_on() { 1.0 / br.br_x } else { 0.0 }; // series susceptance
         let tap = if br.tap == 0.0 { 1.0 } else { br.tap }; // default tap ratio = 1
         b / tap
     }

@@ -131,7 +131,7 @@ pub fn runpf(
             let p_ref = b_ref * &v_a;
             for r in ref_ {
                 for g in gen.iter_mut() {
-                    if g.bus == r {
+                    if g.gen_bus == r {
                         g.pg += (p_ref[r] - p_bus[r]) * base_mva;
                         break;
                     }
@@ -148,8 +148,9 @@ pub fn runpf(
             }
             let pq_bus: HashSet<usize> = HashSet::from_iter(pq.clone().into_iter()); // exclude PQ buses
             for g in gen.iter() {
-                if g.is_on() && !pq_bus.contains(&g.bus) {
-                    v0[g.bus] = Complex64::new(g.vg / (v0[g.bus] * v0[g.bus]).norm(), 0.0);
+                if g.is_on() && !pq_bus.contains(&g.gen_bus) {
+                    v0[g.gen_bus] =
+                        Complex64::new(g.vg / (v0[g.gen_bus] * v0[g.gen_bus]).norm(), 0.0);
                 }
             }
             log::debug!("V0: {}", format_polar_vec(&v0));
@@ -372,16 +373,16 @@ pub(crate) fn pfsoln(
     );
     let qd_gbus = qd_gbus.as_ref().unwrap();
 
-    let is_on = |g: &Gen| g.is_on() && bus[g.bus].is_pq();
+    let is_on = |g: &Gen| g.is_on() && bus[g.gen_bus].is_pq();
 
     let nb = bus.len();
     let mut ngb = vec![0; nb];
     for g in gen.iter_mut() {
-        let s_bus = v[g.bus] * i_bus[g.bus].conj(); // compute total injected bus power
+        let s_bus = v[g.gen_bus] * i_bus[g.gen_bus].conj(); // compute total injected bus power
         if is_on(&g.deref()) {
-            g.qg = s_bus.im * base_mva + qd_gbus[g.bus]; // inj Q + local Qd
+            g.qg = s_bus.im * base_mva + qd_gbus[g.gen_bus]; // inj Q + local Qd
 
-            ngb[g.bus] += 1;
+            ngb[g.gen_bus] += 1;
         } else if g.is_off() {
             g.qg = 0.0;
         }
@@ -389,7 +390,7 @@ pub(crate) fn pfsoln(
     let ngg = gen
         .iter()
         .filter(|&g| is_on(g))
-        .map(|g| ngb[g.bus])
+        .map(|g| ngb[g.gen_bus])
         .collect::<Vec<usize>>(); // number of gens at this gen's bus
 
     // ...at this point any buses with more than one generator will have
@@ -426,10 +427,10 @@ pub(crate) fn pfsoln(
     for (i, g) in gen.iter().enumerate() {
         if is_on(g) {
             // cg[g.bus] = append(cg[g.bus], gen)
-            if cg.contains_key(&g.bus) {
-                cg.get_mut(&g.bus).unwrap().push(i)
+            if cg.contains_key(&g.gen_bus) {
+                cg.get_mut(&g.gen_bus).unwrap().push(i)
             } else {
-                cg.insert(g.bus, vec![i]);
+                cg.insert(g.gen_bus, vec![i]);
             }
             // match cg.get_mut(&g.bus) {
             //     Some(l) => l.push(g),
@@ -524,8 +525,8 @@ pub(crate) fn pfsoln(
         let mut refgen0: Option<usize> = None;
         let mut sum = 0.0;
         for (i, g) in gen.iter_mut().enumerate() {
-            if g.bus == r {
-                let s_bus = v[g.bus] * i_bus[g.bus].conj();
+            if g.gen_bus == r {
+                let s_bus = v[g.gen_bus] * i_bus[g.gen_bus].conj();
 
                 g.pg = s_bus.re * base_mva + pd_refk[0]; // inj P + local Pd
 

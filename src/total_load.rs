@@ -77,7 +77,7 @@ pub fn total_load(
     let lz = match load_zone {
         LoadZone::Bus => Vec::from_iter(0..nb), // each bus is its own zone
         LoadZone::All => vec![1; nb],           // make a single zone of all buses
-        LoadZone::Area => bus.iter().map(|b| b.area).collect(),
+        LoadZone::Area => bus.iter().map(|b| b.bus_area).collect(),
     };
     let nz = *lz.iter().max().unwrap_or(&0); // number of load zones
 
@@ -113,21 +113,21 @@ pub fn total_load(
             for g in gen {
                 if g.is_load() && g.is_on() {
                     if nominal {
-                        p_dd[g.bus] += -g.pmin;
+                        p_dd[g.gen_bus] += -g.pmin;
                         if want_q {
                             let q_dd = q_dd.as_mut().unwrap();
                             // TODO: (gen(ld, QMIN) == 0) .* gen(ld, QMAX) + (gen(ld, QMAX) == 0) .* gen(ld, QMIN)
                             if g.qmin == 0.0 {
-                                q_dd[g.bus] += g.qmax;
+                                q_dd[g.gen_bus] += g.qmax;
                             } else if g.qmax == 0.0 {
-                                q_dd[g.bus] += g.qmin;
+                                q_dd[g.gen_bus] += g.qmin;
                             }
                         }
                     } else {
-                        p_dd[g.bus] += -g.pg;
+                        p_dd[g.gen_bus] += -g.pg;
                         if want_q {
                             let q_dd = q_dd.as_mut().unwrap();
-                            q_dd[g.bus] += -g.qg;
+                            q_dd[g.gen_bus] += -g.qg;
                         }
                     }
                 }

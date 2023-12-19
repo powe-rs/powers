@@ -3,6 +3,7 @@ use casecsv::Case;
 use clap::{Args, Parser, Subcommand};
 use powers7::{load_case, runpf, Alg, GenQLimits, MPOpt};
 use spsolve::rlu::RLU;
+use std::fs::File;
 use std::path::PathBuf;
 
 /// Power flow simulation and optimization.
@@ -145,8 +146,8 @@ fn execute(cli: &Cli) -> Result<()> {
 
     if let Some(out_path) = output {
         let case = Case::new(mpc.name).base_mva(mpc.base_mva).build()?;
-        casecsv::write::write_zip(
-            &out_path,
+        casecsv::write_zip(
+            File::open(out_path)?,
             &case,
             &mpc.bus,
             &mpc.gen,
@@ -154,7 +155,8 @@ fn execute(cli: &Cli) -> Result<()> {
             &Vec::default(),
             &Vec::default(),
             None,
-        )?
+            None,
+        )?;
     }
 
     Ok(())

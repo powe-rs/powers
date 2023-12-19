@@ -58,10 +58,10 @@ pub(crate) fn make_b(
     let b_p = {
         let mut branch = branch.to_vec(); // modify a copy of branch
         for br in branch.iter_mut() {
-            br.b = 0.0; // zero out line charging shunts
+            br.br_b = 0.0; // zero out line charging shunts
             br.tap = 1.0; // cancel out taps
             if alg == Alg::FDXB {
-                br.r = 0.0; // zero out line resistance
+                br.br_r = 0.0; // zero out line resistance
             }
         }
         let (y_p, _, _) = make_ybus(base_mva, &bus, &branch, false);
@@ -75,7 +75,7 @@ pub(crate) fn make_b(
         for br in branch.iter_mut() {
             br.shift = 0.0; // zero out phase shifters
             if alg == Alg::FDBX {
-                br.r = 0.0; // zero out line resistance
+                br.br_r = 0.0; // zero out line resistance
             }
         }
         let (y_pp, _, _) = make_ybus(base_mva, &bus, &branch, false);

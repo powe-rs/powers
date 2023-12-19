@@ -172,7 +172,7 @@ pub fn ext_to_int(mpc: &MPC) -> MPC {
         }
     }
     for (i, g) in mpc.gen.iter().enumerate() {
-        if g.is_on() && bs.contains(&g.bus) {
+        if g.is_on() && bs.contains(&g.gen_bus) {
             order.gen.status.on.push(i);
         } else {
             order.gen.status.off.push(i);
@@ -192,7 +192,7 @@ pub fn ext_to_int(mpc: &MPC) -> MPC {
     mpc.bus.retain(|b| b.is_pq() || b.is_pv() || b.is_ref());
     mpc.branch
         .retain(|br| br.is_on() && bs.contains(&br.f_bus) && bs.contains(&br.t_bus));
-    mpc.gen.retain(|g| g.is_on() && bs.contains(&g.bus));
+    mpc.gen.retain(|g| g.is_on() && bs.contains(&g.gen_bus));
 
     // update sizes
     let nb = mpc.bus.len();
@@ -208,7 +208,7 @@ pub fn ext_to_int(mpc: &MPC) -> MPC {
             b.bus_i = order.bus.e2i[&b.bus_i];
         }
         for g in mpc.gen.iter_mut() {
-            g.bus = order.bus.e2i[&g.bus];
+            g.gen_bus = order.bus.e2i[&g.gen_bus];
         }
         for br in mpc.branch.iter_mut() {
             br.f_bus = order.bus.e2i[&br.f_bus];
@@ -296,8 +296,8 @@ pub(crate) fn int_to_ext(mpc: &MPC) -> Result<MPC> {
         mpc.branch[i].t_bus = order.bus.i2e[j];
     }
     for &i in &order.gen.status.on {
-        let j = mpc.gen[i].bus;
-        mpc.gen[i].bus = order.bus.i2e[j];
+        let j = mpc.gen[i].gen_bus;
+        mpc.gen[i].gen_bus = order.bus.i2e[j];
     }
     order.external = None;
 
@@ -308,8 +308,8 @@ pub(crate) fn int_to_ext(mpc: &MPC) -> Result<MPC> {
 mod tests {
     use anyhow::{format_err, Result};
     use casecsv::NONE;
-    use itertools::izip;
     use std::env;
+    use std::iter::zip;
     use std::path::Path;
 
     use crate::loadcase::load_case;
@@ -325,7 +325,7 @@ mod tests {
         let mut mpci = load_case(&casedata_dir.join("t_case_int.case"))?;
 
         mpci.bus.iter_mut().for_each(|b| b.bus_i -= 1);
-        mpci.gen.iter_mut().for_each(|g| g.bus -= 1);
+        mpci.gen.iter_mut().for_each(|g| g.gen_bus -= 1);
         mpci.branch.iter_mut().for_each(|br| br.f_bus -= 1);
         mpci.branch.iter_mut().for_each(|br| br.t_bus -= 1);
 
@@ -334,7 +334,7 @@ mod tests {
 
     fn compare_case(expected: &MPC, actual: &MPC) -> Result<()> {
         if let Some((b_exp, b_act)) =
-            izip!(&expected.bus, &actual.bus).find(|(b_exp, b_act)| b_exp != b_act)
+            zip(&expected.bus, &actual.bus).find(|(b_exp, b_act)| b_exp != b_act)
         {
             return Err(format_err!(
                 "buses must be equal:\nexpected: {:?}\nactual: {:?}",
@@ -343,7 +343,7 @@ mod tests {
             ));
         }
         if let Some((g_exp, g_act)) =
-            izip!(&expected.gen, &actual.gen).find(|(g_exp, g_act)| g_exp != g_act)
+            zip(&expected.gen, &actual.gen).find(|(g_exp, g_act)| g_exp != g_act)
         {
             return Err(format_err!(
                 "gens must be equal:\nexpected: {:?}\nactual: {:?}",
@@ -352,7 +352,7 @@ mod tests {
             ));
         }
         if let Some((br_exp, br_act)) =
-            izip!(&expected.branch, &actual.branch).find(|(br_exp, br_act)| br_exp != br_act)
+            zip(&expected.branch, &actual.branch).find(|(br_exp, br_act)| br_exp != br_act)
         {
             return Err(format_err!(
                 "branches must be equal:\nexpected: {:?}\nactual: {:?}",

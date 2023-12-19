@@ -45,7 +45,7 @@ pub(crate) fn bus_types(bus: &[Bus], gen: &[Gen]) -> (Vec<usize>, Vec<usize>, Ve
     let bus_gen_status = gen
         .iter()
         .filter(|g| g.is_on())
-        .map(|g| g.bus)
+        .map(|g| g.gen_bus)
         .collect::<HashSet<usize>>();
 
     // Form index lists for slack, PV, and PQ buses.
@@ -111,11 +111,11 @@ pub(crate) fn make_sbus(
             .zip(sg)
             .filter(|(g, _)| g.is_on())
             .for_each(|(g, s_pu)| {
-                s_bus[g.bus] += s_pu;
+                s_bus[g.gen_bus] += s_pu;
             });
     } else {
         gen.iter().filter(|g| g.is_on()).for_each(|g| {
-            s_bus[g.bus] += Complex64::new(g.pg, g.qg) / base_mva;
+            s_bus[g.gen_bus] += Complex64::new(g.pg, g.qg) / base_mva;
         });
     }
 
@@ -245,11 +245,11 @@ pub(crate) fn make_ybus(
 
     for (i, br) in branch.iter().enumerate() {
         let y_s = if br.is_on() {
-            Complex64::new(1.0, 0.0) / Complex64::new(br.r, br.x)
+            Complex64::new(1.0, 0.0) / Complex64::new(br.br_r, br.br_x)
         } else {
             Complex64::default()
         }; // series admittance
-        let b_c = if br.is_on() { br.b } else { 0.0 }; // line charging susceptance
+        let b_c = if br.is_on() { br.br_b } else { 0.0 }; // line charging susceptance
         let t = if br.tap == 0.0 { 1.0 } else { br.tap }; // default tap ratio = 1
         let tap = Complex64::from_polar(t, br.shift * PI / 180.0); // add phase shifters
 

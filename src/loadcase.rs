@@ -1,6 +1,7 @@
 use crate::mpc::MPC;
 use anyhow::Result;
-use casecsv::read::{read_dir, read_zip};
+use casecsv::{read_dir, read_zip};
+use std::fs::File;
 use std::path::PathBuf;
 
 pub fn load_case(case_path: &PathBuf) -> Result<MPC> {
@@ -12,8 +13,8 @@ pub fn load_case(case_path: &PathBuf) -> Result<MPC> {
         },
     };
 
-    let (case, bus, gen, branch, _gencost, _dcline) = if is_case {
-        read_zip(case_path)?
+    let (case, bus, gen, branch, _gencost, _dcline, _readme, _license) = if is_case {
+        read_zip(File::open(case_path)?)?
     } else {
         read_dir(case_path)?
     };
