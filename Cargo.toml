@@ -6,7 +6,7 @@ edition = "2021"
 
 [dependencies]
 num-complex = "0.4.0"
-casecsv = { path = "../casecsv" }
+caseformat = { path = "../../caseformat" }
 sparsetools = "0.2"
 spsolve = { version = "0.1", features = ["rlu"] }
 anyhow = "1"

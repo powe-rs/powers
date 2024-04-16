@@ -1,5 +1,5 @@
 use crate::order::Order;
-use casecsv::{Branch, Bus, Gen};
+use caseformat::{Branch, Bus, Gen};
 
 #[derive(Clone, Default)]
 pub struct MPC {
@@ -20,9 +20,12 @@ pub struct MPC {
 
     // pub areas: Option<Vec<Area>>,
     pub(crate) order: Option<Order>,
-
     // pub(crate) a_mat: Option<CSR<usize, f64>>,
     // pub(crate) n_mat: Option<CSR<usize, f64>>,
-    pub(crate) success: Option<bool>,
-    pub(crate) iterations: Option<usize>,
+}
+
+impl MPC {
+    pub fn order(&self) -> &Option<Order> {
+        &self.order
+    }
 }

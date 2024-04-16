@@ -1,8 +1,9 @@
 use crate::mpc::MPC;
 use anyhow::Result;
-use casecsv::{read_dir, read_zip};
+use caseformat::{read_dir, read_zip};
 use std::fs::File;
 use std::path::PathBuf;
+use crate::ext_to_int;
 
 pub fn load_case(case_path: &PathBuf) -> Result<MPC> {
     let is_case = match case_path.extension() {
@@ -27,5 +28,6 @@ pub fn load_case(case_path: &PathBuf) -> Result<MPC> {
         branch,
         ..Default::default()
     };
-    Ok(mpc)
+
+    Ok(ext_to_int(&mpc))
 }

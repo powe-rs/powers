@@ -1,7 +1,6 @@
 use crate::cmplx;
-use crate::mpopt::MPOpt;
-use crate::powers::make_sdzip;
-use casecsv::{Bus, Gen};
+use crate::zip::make_sdzip;
+use caseformat::{Bus, Gen};
 use num_complex::Complex64;
 
 #[derive(PartialEq)]
@@ -58,7 +57,8 @@ pub fn total_load(
     _load_zones: Option<&[Option<usize>]>,
     load_type: LoadType,
     nominal: bool,
-    mpopt: &MPOpt,
+    pw: Option<[f64; 3]>,
+    qw: Option<[f64; 3]>,
     want_q: bool,
 ) -> (Vec<f64>, Option<Vec<f64>>) {
     let nb = bus.len();
@@ -83,7 +83,7 @@ pub fn total_load(
 
     // fixed load at each bus, & initialize dispatchable
     let (p_df, q_df) = if want_fixed {
-        let (sd_z, sd_i, sd_p) = make_sdzip(1.0, bus, mpopt);
+        let (sd_z, sd_i, sd_p) = make_sdzip(1.0, bus, pw, qw);
 
         let vm: Vec<Complex64> = bus.iter().map(|b| cmplx!(b.vm)).collect();
 
