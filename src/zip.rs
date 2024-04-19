@@ -8,7 +8,7 @@ use num_complex::Complex64;
 /// 'z', 'i' and 'p' correspond to the nominal p.u. complex power
 /// (at 1 p.u. voltage magnitude) of the constant impedance, constant current,
 /// and constant power portions, respectively of the ZIP load model.
-pub(crate) fn make_sdzip(
+pub fn make_sdzip(
     base_mva: f64,
     bus: &[Bus],
     pw: Option<[f64; 3]>,

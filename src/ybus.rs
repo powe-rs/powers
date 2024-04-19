@@ -1,7 +1,7 @@
-use std::f64::consts::PI;
 use caseformat::{Branch, Bus};
 use num_complex::Complex64;
 use sparsetools::coo::Coo;
+use std::f64::consts::PI;
 
 /// Builds the bus admittance matrix and branch admittance matrices.
 pub fn make_ybus(
@@ -11,8 +11,7 @@ pub fn make_ybus(
     yf_yt: bool,
 ) -> (
     Coo<usize, Complex64>,
-    Option<Coo<usize, Complex64>>,
-    Option<Coo<usize, Complex64>>,
+    Option<(Coo<usize, Complex64>, Coo<usize, Complex64>)>,
 ) {
     let nb = bus.len();
     let nl = branch.len();
@@ -23,13 +22,8 @@ pub fn make_ybus(
     //      |    | = |          | * |    |
     //      | It |   | Ytf  Ytt |   | Vt |
     let mut y_bus = Coo::with_size(nb, nb);
-    let mut y_f = if yf_yt {
-        Some(Coo::with_size(nl, nb))
-    } else {
-        None
-    };
-    let mut y_t = if yf_yt {
-        Some(Coo::with_size(nl, nb))
+    let mut y_br = if yf_yt {
+        Some((Coo::with_size(nl, nb), Coo::with_size(nl, nb)))
     } else {
         None
     };
@@ -52,8 +46,7 @@ pub fn make_ybus(
         let (f, t) = (br.f_bus, br.t_bus);
 
         if yf_yt {
-            let y_f = y_f.as_mut().unwrap();
-            let y_t = y_t.as_mut().unwrap();
+            let (y_f, y_t) = y_br.as_mut().unwrap();
 
             y_f.push(i, f, y_ff);
             y_f.push(i, t, y_ft);
@@ -76,7 +69,7 @@ pub fn make_ybus(
     for (i, _) in bus.iter().enumerate() {
         y_bus.push(i, i, y_sh[i]);
     }
-    (y_bus, y_f, y_t)
+    (y_bus, y_br)
 
     /*
     // series admittance

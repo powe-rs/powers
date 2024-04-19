@@ -31,3 +31,12 @@ pub fn norm_inf(a: &[f64]) -> Option<f64> {
     });
     Some(max)
 }
+
+/// Returns the 2-norm (Euclidean) of `a`.
+pub fn norm(a: &[f64]) -> f64 {
+    let mut sqsum = 0.0;
+    for i in 0..a.len() {
+        sqsum += a[i] * a[i];
+    }
+    f64::sqrt(sqsum)
+}

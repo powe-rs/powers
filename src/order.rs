@@ -17,7 +17,7 @@ pub struct Saved {
 
 #[derive(Clone)]
 pub struct Order {
-    pub(crate) state: State,
+    pub state: State,
     pub(crate) internal: Option<Saved>,
     pub(crate) external: Option<Saved>,
     pub bus: BusOrder,

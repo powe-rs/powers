@@ -1,8 +1,8 @@
-use std::iter::zip;
+use crate::math::J;
 use num_complex::Complex64;
 use sparsetools::coo::Coo;
 use sparsetools::csr::CSR;
-use crate::math::J;
+use std::iter::zip;
 
 /// Computes partial derivatives of current balance w.r.t. voltage.
 ///
@@ -11,7 +11,7 @@ use crate::math::J;
 /// Returns two matrices containing partial derivatives of the complex bus
 /// current balance w.r.t voltage magnitude and voltage angle, respectively
 /// (for all buses).
-pub fn d_imis_d_v(
+pub fn d_imis_dv(
     s_bus: &Vec<Complex64>,
     y_bus: &CSR<usize, Complex64>,
     v: &[Complex64],
@@ -19,7 +19,7 @@ pub fn d_imis_d_v(
 ) -> anyhow::Result<(CSR<usize, Complex64>, CSR<usize, Complex64>)> {
     let n = v.len();
 
-    let (d_imis_d_v1, d_imis_d_v2) = if vcart {
+    let (d_imis_dv1, d_imis_dv2) = if vcart {
         /*
         diagSV2c = sparse(1:n, 1:n, conj(Sbus./(V.^2)), n, n);
         */
@@ -33,11 +33,11 @@ pub fn d_imis_d_v(
                 .map(|(s_bus, v)| s_bus / (v * v).conj())
                 .collect(),
         )?
-            .to_csr();
-        let d_imis_d_v1 = y_bus + &diag_sv2c; // dImis/dVr
-        let d_imis_d_v2 = J * (y_bus - diag_sv2c); // dImis/dVi
+        .to_csr();
+        let d_imis_dvr = y_bus + &diag_sv2c;
+        let d_imis_dvi = J * (y_bus - diag_sv2c);
 
-        (d_imis_d_v1, d_imis_d_v2)
+        (d_imis_dvr, d_imis_dvi)
     } else {
         // let v_m = Vec::from_real(&v.norm());
         // let v_norm: Vec<Complex64> = (0..n).map(|i| v[i] / cmplx!(v[i].norm())).collect();
@@ -62,11 +62,11 @@ pub fn d_imis_d_v(
         // let diag_v_norm = CSR::with_diag((v / v.norm()).to_vec());
         let diag_v_norm = CSR::with_diagonal(v_norm);
 
-        let d_imis_d_v1 = J * (y_bus * diag_v - diag_ibus); // dImis/dVa
-        let d_imis_d_v2 = y_bus * diag_v_norm + diag_ibus_vm; // dImis/dVm
+        let d_imis_dva = J * (y_bus * diag_v - diag_ibus);
+        let d_imis_dvm = y_bus * diag_v_norm + diag_ibus_vm; // dImis/dVm
 
-        (d_imis_d_v1, d_imis_d_v2)
+        (d_imis_dva, d_imis_dvm)
     };
 
-    Ok((d_imis_d_v1, d_imis_d_v2))
+    Ok((d_imis_dv1, d_imis_dv2))
 }
