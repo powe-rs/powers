@@ -11,6 +11,7 @@ mod ybus;
 mod zip;
 
 pub mod debug;
+mod jac;
 pub mod math;
 pub mod total_load;
 
@@ -19,6 +20,7 @@ pub use d_imis_dv::*;
 pub use dc::*;
 pub use ext_to_int::*;
 pub use int_to_ext::*;
+pub use jac::*;
 pub use loadcase::*;
 pub use mpc::*;
 pub use order::*;
