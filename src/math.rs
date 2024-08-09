@@ -17,26 +17,27 @@ macro_rules! cmplx {
     };
 }
 
-/// Computes the infinity norm: `max(abs(a))`
-pub fn norm_inf(a: &[f64]) -> Option<f64> {
-    if a.is_empty() {
-        return None;
-    }
-    let mut max = f64::NEG_INFINITY;
-    a.iter().for_each(|v| {
-        let absvi = v.abs();
-        if absvi > max {
-            max = absvi
-        }
-    });
-    Some(max)
-}
-
-/// Returns the 2-norm (Euclidean) of `a`.
-pub fn norm(a: &[f64]) -> f64 {
-    let mut sqsum = 0.0;
-    for i in 0..a.len() {
-        sqsum += a[i] * a[i];
-    }
-    f64::sqrt(sqsum)
-}
+//
+// /// Computes the infinity norm: `max(abs(a))`
+// pub fn norm_inf(a: &[f64]) -> Option<f64> {
+//     if a.is_empty() {
+//         return None;
+//     }
+//     let mut max = f64::NEG_INFINITY;
+//     a.iter().for_each(|v| {
+//         let absvi = v.abs();
+//         if absvi > max {
+//             max = absvi
+//         }
+//     });
+//     Some(max)
+// }
+//
+// /// Returns the 2-norm (Euclidean) of `a`.
+// pub fn norm(a: &[f64]) -> f64 {
+//     let mut sqsum = 0.0;
+//     for i in 0..a.len() {
+//         sqsum += a[i] * a[i];
+//     }
+//     f64::sqrt(sqsum)
+// }
