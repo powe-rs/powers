@@ -3,7 +3,6 @@ use anyhow::Result;
 use caseformat::{read_dir, read_zip};
 use std::fs::File;
 use std::path::PathBuf;
-use crate::ext_to_int;
 
 pub fn load_case(case_path: &PathBuf) -> Result<MPC> {
     let is_case = match case_path.extension() {
@@ -29,5 +28,5 @@ pub fn load_case(case_path: &PathBuf) -> Result<MPC> {
         ..Default::default()
     };
 
-    Ok(ext_to_int(&mpc))
+    Ok(mpc)
 }
