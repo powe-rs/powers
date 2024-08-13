@@ -1,4 +1,3 @@
-use crate::math::J;
 use num_complex::Complex64;
 use sparsetools::coo::Coo;
 use sparsetools::csr::CSR;
@@ -35,7 +34,7 @@ pub fn d_imis_dv(
         )?
         .to_csr();
         let d_imis_dvr = y_bus + &diag_sv2c;
-        let d_imis_dvi = J * (y_bus - diag_sv2c);
+        let d_imis_dvi = Complex64::i() * (y_bus - diag_sv2c);
 
         (d_imis_dvr, d_imis_dvi)
     } else {
@@ -62,7 +61,7 @@ pub fn d_imis_dv(
         // let diag_v_norm = CSR::with_diag((v / v.norm()).to_vec());
         let diag_v_norm = CSR::with_diagonal(v_norm);
 
-        let d_imis_dva = J * (y_bus * diag_v - diag_ibus);
+        let d_imis_dva = Complex64::i() * (y_bus * diag_v - diag_ibus);
         let d_imis_dvm = y_bus * diag_v_norm + diag_ibus_vm; // dImis/dVm
 
         (d_imis_dva, d_imis_dvm)

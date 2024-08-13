@@ -12,7 +12,6 @@ mod zip;
 
 pub mod debug;
 mod jac;
-pub mod math;
 pub mod total_load;
 
 pub use bus_types::*;

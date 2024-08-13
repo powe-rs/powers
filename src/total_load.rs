@@ -1,4 +1,3 @@
-use crate::cmplx;
 use crate::zip::make_sdzip;
 use caseformat::{Bus, Gen};
 use num_complex::Complex64;
@@ -85,7 +84,7 @@ pub fn total_load(
     let (p_df, q_df) = if want_fixed {
         let (sd_z, sd_i, sd_p) = make_sdzip(1.0, bus, pw, qw);
 
-        let vm: Vec<Complex64> = bus.iter().map(|b| cmplx!(b.vm)).collect();
+        let vm: Vec<Complex64> = bus.iter().map(|b| Complex64::new(b.vm, 0.0)).collect();
 
         // let s_bus_d = &sd_p + &sd_i * &vm + &sd_z * &(&vm * &vm);
         let s_bus_d = (0..nb)

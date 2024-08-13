@@ -1,5 +1,3 @@
-use crate::cmplx;
-use crate::math::J;
 use caseformat::{Bus, Gen};
 use num_complex::Complex64;
 use sparsetools::csr::{CCSR, CSR};
@@ -95,9 +93,9 @@ pub fn make_sbus(
         .filter(|b| b.pd != 0.0 || b.qd != 0.0)
         .for_each(|b| {
             // Compute per-bus loads in p.u.
-            let sd_z = cmplx!(b.pd * pw[2], b.qd * qw[2]) / base_mva;
-            let sd_i = cmplx!(b.pd * pw[1], b.qd * qw[1]) / base_mva;
-            let sd_p = cmplx!(b.pd * pw[0], b.qd * qw[0]) / base_mva;
+            let sd_z = Complex64::new(b.pd * pw[2], b.qd * qw[2]) / base_mva;
+            let sd_i = Complex64::new(b.pd * pw[1], b.qd * qw[1]) / base_mva;
+            let sd_p = Complex64::new(b.pd * pw[0], b.qd * qw[0]) / base_mva;
 
             let vm_i = match vm {
                 Some(vm) => Complex64::new(vm[b.bus_i], 0.0),
@@ -131,7 +129,7 @@ pub fn d_sbus_d_v(
         // dSbus/dVi = 1j * (conj(diagIbus) - diagV * conj(Ybus))
 
         let d_sbus_d_vr = diag_i_bus.conj() + &diag_v * y_bus.conj();
-        let d_sbus_d_vi = (diag_i_bus.conj() - &diag_v * y_bus.conj()) * J;
+        let d_sbus_d_vi = (diag_i_bus.conj() - &diag_v * y_bus.conj()) * Complex64::i();
 
         (d_sbus_d_vr, d_sbus_d_vi)
     } else {
@@ -144,7 +142,7 @@ pub fn d_sbus_d_v(
         // dSbus/dVa = 1j * diagV * conj(diagIbus - Ybus * diagV)
         // dSbus/dVm = diagV * conj(Ybus * diagVnorm) + conj(diagIbus) * diagVnorm
 
-        let mut d_sbus_d_va = &diag_v * (&diag_i_bus - y_bus * &diag_v).conj() * J;
+        let mut d_sbus_d_va = &diag_v * (&diag_i_bus - y_bus * &diag_v).conj() * Complex64::i();
         let d_sbus_d_vm =
             &diag_v * (y_bus * &diag_v_norm).conj() + diag_i_bus.conj() * &diag_v_norm;
 
