@@ -2,12 +2,15 @@
 name = "powers"
 version = "0.1.0"
 description = "Power flow simulation and optimization"
+license = "BSD-3-Clause"
+repository = "https://github.com/powe-rs/powers"
 edition = "2021"
 
 [dependencies]
 num-complex = "0.4.0"
-caseformat = { path = "../../caseformat" }
-sparsetools = "0.2"
+caseformat = "0.1"
+sparsetools = "0.2.3"
+full = "0.3"
 spsolve = { version = "0.1", features = ["rlu"] }
 anyhow = "1"
 clap = { version = "4.4.6", features = ["derive"] }
