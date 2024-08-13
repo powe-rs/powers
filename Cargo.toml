@@ -1,6 +1,6 @@
 [package]
 name = "powers"
-version = "0.1.0"
+version = "0.2.0"
 description = "Power flow simulation and optimization"
 license = "BSD-3-Clause"
 repository = "https://github.com/powe-rs/powers"
